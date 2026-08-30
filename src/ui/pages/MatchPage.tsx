@@ -1,0 +1,829 @@
+import { useEffect, useMemo, useRef, useState, type ChangeEventHandler } from 'react';
+import {
+  archiveToJson,
+  exportArchive,
+  importArchiveFromJson,
+} from '../../application/usecases/archiveService';
+import {
+  buildRound,
+  buildRoundRewardLedger,
+  buildRoundStats,
+  previewRoundSettlement,
+} from '../../application/usecases/matchService';
+import type { SettlementMode } from '../../domain/roundSettlement';
+import type { Athlete, Match, MatchPlayer } from '../../domain/types';
+import { AthleteRepositoryDexie } from '../../infrastructure/repositories/local/athleteRepositoryDexie';
+import { ColaLedgerRepositoryDexie } from '../../infrastructure/repositories/local/colaLedgerRepositoryDexie';
+import { MatchRepositoryDexie } from '../../infrastructure/repositories/local/matchRepositoryDexie';
+import { RoundRepositoryDexie } from '../../infrastructure/repositories/local/roundRepositoryDexie';
+import { createId } from '../../shared/createId';
+
+interface ActiveMatchState {
+  match: Match;
+  players: MatchPlayer[];
+  nextRoundNo: number;
+}
+
+interface SessionState {
+  mode: SettlementMode;
+  participants: string[];
+  roundNo: number;
+  parentRoundId: string | null;
+  overtimeSeq: number;
+}
+
+interface LastSubmissionState {
+  roundId: string;
+  session: SessionState;
+  pendingWinnerIds: string[];
+}
+
+interface ResultDisplayRow {
+  athleteId: string;
+  name: string;
+  attempts: number;
+  hits: number;
+  hitRate: number;
+  pointDelta: -1 | 0 | 1;
+  colaDelta: -1 | 0 | 1;
+}
+
+interface RoundEndSummaryRow {
+  athleteId: string;
+  name: string;
+  rounds: number;
+  points: number;
+  cola: number;
+}
+
+interface MatchEndSummaryRow {
+  athleteId: string;
+  name: string;
+  rounds: number;
+  points: number;
+  cola: number;
+}
+
+type UiStage = 'select' | 'setup' | 'input' | 'result';
+
+const athleteRepo = new AthleteRepositoryDexie();
+const matchRepo = new MatchRepositoryDexie();
+const roundRepo = new RoundRepositoryDexie();
+const colaRepo = new ColaLedgerRepositoryDexie();
+
+export function MatchPage() {
+  const [athletes, setAthletes] = useState<Athlete[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [activeMatch, setActiveMatch] = useState<ActiveMatchState | null>(null);
+  const [stage, setStage] = useState<UiStage>('select');
+  const [session, setSession] = useState<SessionState | null>(null);
+  const [nextSession, setNextSession] = useState<SessionState | null>(null);
+  const [pendingWinnerIds, setPendingWinnerIds] = useState<string[]>([]);
+  const [attemptsMap, setAttemptsMap] = useState<Record<string, number>>({});
+  const [hitsMap, setHitsMap] = useState<Record<string, number>>({});
+  const [resultRows, setResultRows] = useState<ResultDisplayRow[]>([]);
+  const [resultHint, setResultHint] = useState('');
+  const [error, setError] = useState('');
+  const [archiveMessage, setArchiveMessage] = useState('');
+  const [lastSubmission, setLastSubmission] = useState<LastSubmissionState | null>(null);
+  const [isStartingMatch, setIsStartingMatch] = useState(false);
+  const [showRoundEndModal, setShowRoundEndModal] = useState(false);
+  const [roundEndRows, setRoundEndRows] = useState<RoundEndSummaryRow[]>([]);
+  const [showMatchEndModal, setShowMatchEndModal] = useState(false);
+  const [matchEndRows, setMatchEndRows] = useState<MatchEndSummaryRow[]>([]);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  const athleteMap = useMemo(() => {
+    const map = new Map<string, Athlete>();
+    athletes.forEach((item) => map.set(item.id, item));
+    return map;
+  }, [athletes]);
+
+  useEffect(() => {
+    void boot();
+  }, []);
+
+  const boot = async () => {
+    const [active, allAthletes] = await Promise.all([
+      matchRepo.getActiveMatch(),
+      athleteRepo.listActive(),
+    ]);
+
+    setAthletes(allAthletes);
+
+    if (!active) {
+      setStage('select');
+      return;
+    }
+
+    const [players, rounds] = await Promise.all([
+      matchRepo.getPlayers(active.id),
+      roundRepo.getRoundsByMatch(active.id),
+    ]);
+
+    const maxRoundNo = rounds.reduce((max, item) => Math.max(max, item.roundNo), 0);
+    const nextRoundNo = maxRoundNo + 1;
+
+    const state: ActiveMatchState = {
+      match: active,
+      players,
+      nextRoundNo,
+    };
+
+    setActiveMatch(state);
+    prepareRegularSession(state);
+  };
+
+  const prepareRegularSession = (state: ActiveMatchState) => {
+    const participants = state.players.map((item) => item.athleteId);
+    const newSession: SessionState = {
+      mode: 'regular',
+      participants,
+      roundNo: state.nextRoundNo,
+      parentRoundId: null,
+      overtimeSeq: 0,
+    };
+    setSession(newSession);
+    setNextSession(null);
+    setPendingWinnerIds([]);
+    setLastSubmission(null);
+    setResultRows([]);
+    setShowRoundEndModal(false);
+    setRoundEndRows([]);
+    setShowMatchEndModal(false);
+    setMatchEndRows([]);
+    setResultHint('');
+    initInputs(participants, 'regular');
+    setStage('setup');
+  };
+
+  const initInputs = (participants: string[], mode: SettlementMode) => {
+    const defaultAttempts = mode === 'regular' ? 10 : 1;
+    const attempts: Record<string, number> = {};
+    const hits: Record<string, number> = {};
+    participants.forEach((id) => {
+      attempts[id] = defaultAttempts;
+      hits[id] = 0;
+    });
+    setAttemptsMap(attempts);
+    setHitsMap(hits);
+  };
+
+  const toggleSelect = (athleteId: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(athleteId)
+        ? prev.filter((x) => x !== athleteId)
+        : [...prev, athleteId],
+    );
+  };
+
+  const createMatch = async () => {
+    setError('');
+    setIsStartingMatch(true);
+    if (selectedIds.length < 2) {
+      setError('至少选择 2 名球员。');
+      setIsStartingMatch(false);
+      return;
+    }
+
+    try {
+      const now = Date.now();
+      const match: Match = {
+        id: createId(),
+        title: `罚球局 ${new Date(now).toLocaleString()}`,
+        status: 'active',
+        createdAt: now,
+        finishedAt: null,
+      };
+
+      const players: MatchPlayer[] = selectedIds.map((athleteId, index) => ({
+        id: createId(),
+        matchId: match.id,
+        athleteId,
+        joinOrder: index + 1,
+      }));
+
+      await matchRepo.createMatch(match, players);
+
+      const state: ActiveMatchState = {
+        match,
+        players,
+        nextRoundNo: 1,
+      };
+
+      setActiveMatch(state);
+      prepareRegularSession(state);
+    } catch (err) {
+      setError(`开新局失败：${String(err)}`);
+    } finally {
+      setIsStartingMatch(false);
+    }
+  };
+
+  const onExportArchive = async () => {
+    try {
+      const payload = await exportArchive();
+      const json = archiveToJson(payload);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 19).replaceAll(':', '-');
+      a.href = url;
+      a.download = `basketball-archive-${stamp}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setArchiveMessage('导出成功。');
+    } catch {
+      setArchiveMessage('导出失败，请重试。');
+    }
+  };
+
+  const openImportDialog = () => {
+    importInputRef.current?.click();
+  };
+
+  const onImportArchiveFile: ChangeEventHandler<HTMLInputElement> = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const ok = window.confirm('导入将覆盖当前本地数据，是否继续？');
+    if (!ok) return;
+
+    try {
+      const text = await file.text();
+      await importArchiveFromJson(text);
+      setArchiveMessage('导入成功，已刷新数据。');
+      setSelectedIds([]);
+      await boot();
+    } catch {
+      setArchiveMessage('导入失败：文件格式错误或版本不支持。');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const finishMatch = async () => {
+    if (!activeMatch) return;
+    await matchRepo.finishMatch(activeMatch.match.id);
+    setActiveMatch(null);
+    setSession(null);
+    setNextSession(null);
+    setPendingWinnerIds([]);
+    setLastSubmission(null);
+    setShowMatchEndModal(false);
+    setMatchEndRows([]);
+    setStage('select');
+  };
+
+  const openMatchEndSummary = async () => {
+    if (!activeMatch) return;
+
+    const [rounds, stats] = await Promise.all([
+      roundRepo.getRoundsByMatch(activeMatch.match.id),
+      roundRepo.getRoundStatsByMatch(activeMatch.match.id),
+    ]);
+
+    const roundNoByRoundId = new Map<string, number>();
+    rounds.forEach((row) => {
+      roundNoByRoundId.set(row.id, row.roundNo);
+    });
+
+    const byAthlete = new Map<
+      string,
+      { roundNos: Set<number>; points: number; cola: number }
+    >();
+
+    stats.forEach((row) => {
+      const roundNo = roundNoByRoundId.get(row.roundId);
+      const prev = byAthlete.get(row.athleteId) ?? {
+        roundNos: new Set<number>(),
+        points: 0,
+        cola: 0,
+      };
+      if (typeof roundNo === 'number') {
+        prev.roundNos.add(roundNo);
+      }
+      prev.points += row.pointDelta;
+      prev.cola += row.colaDelta;
+      byAthlete.set(row.athleteId, prev);
+    });
+
+    const rows = activeMatch.players.map((item) => {
+      const score = byAthlete.get(item.athleteId);
+      return {
+        athleteId: item.athleteId,
+        name: athleteMap.get(item.athleteId)?.name ?? item.athleteId,
+        rounds: score?.roundNos.size ?? 0,
+        points: score?.points ?? 0,
+        cola: score?.cola ?? 0,
+      };
+    });
+
+    setMatchEndRows(rows.sort((a, b) => b.points - a.points));
+    setShowMatchEndModal(true);
+  };
+
+  const startHitInput = () => {
+    if (!session) return;
+    const fixedHits = { ...hitsMap };
+    session.participants.forEach((id) => {
+      const attempts = attemptsMap[id] ?? 0;
+      const current = fixedHits[id] ?? 0;
+      fixedHits[id] = Math.min(Math.max(current, 0), attempts);
+    });
+    setHitsMap(fixedHits);
+    setStage('input');
+  };
+
+  const updateAttempt = (athleteId: string, value: number) => {
+    const safe = Math.max(0, Math.floor(value || 0));
+    setAttemptsMap((prev) => ({ ...prev, [athleteId]: safe }));
+    setHitsMap((prev) => ({ ...prev, [athleteId]: Math.min(prev[athleteId] ?? 0, safe) }));
+  };
+
+  const addHit = (athleteId: string, delta: number) => {
+    const attempts = attemptsMap[athleteId] ?? 0;
+    const current = hitsMap[athleteId] ?? 0;
+    const next = Math.min(Math.max(current + delta, 0), attempts);
+    setHitsMap((prev) => ({ ...prev, [athleteId]: next }));
+  };
+
+  const submitRound = async () => {
+    if (!activeMatch || !session) return;
+
+    const inputs = session.participants.map((athleteId) => ({
+      athleteId,
+      attempts: attemptsMap[athleteId] ?? 0,
+      hits: hitsMap[athleteId] ?? 0,
+    }));
+
+    const settlement = previewRoundSettlement(inputs, session.mode);
+
+    const round = buildRound({
+      matchId: activeMatch.match.id,
+      roundNo: session.roundNo,
+      mode: session.mode,
+      parentRoundId: session.parentRoundId,
+      overtimeSeq: session.overtimeSeq,
+    });
+
+    const stats = buildRoundStats({
+      matchId: activeMatch.match.id,
+      roundId: round.id,
+      settlement,
+    });
+    const ledger = buildRoundRewardLedger({
+      matchId: activeMatch.match.id,
+      roundId: round.id,
+      settlement,
+    });
+
+    await roundRepo.createRound(round);
+    await roundRepo.saveRoundStats(stats);
+    await colaRepo.append(ledger);
+    setLastSubmission({
+      roundId: round.id,
+      session,
+      pendingWinnerIds: [...pendingWinnerIds],
+    });
+
+    setResultRows(
+      settlement.rows.map((row) => ({
+        athleteId: row.athleteId,
+        name: athleteMap.get(row.athleteId)?.name ?? row.athleteId,
+        attempts: row.attempts,
+        hits: row.hits,
+        hitRate: row.hitRate,
+        pointDelta: row.pointDelta,
+        colaDelta: row.colaDelta,
+      })),
+    );
+
+    let plannedNext: SessionState | null = null;
+
+    if (session.mode === 'regular') {
+      const hasLoserTie = settlement.needLoserOvertime;
+      const hasWinnerTie = settlement.needWinnerOvertime;
+      setPendingWinnerIds(hasWinnerTie ? settlement.winnerAthleteIds : []);
+
+      if (hasLoserTie) {
+        plannedNext = {
+          mode: 'overtime_loser',
+          participants: settlement.loserAthleteIds,
+          roundNo: session.roundNo,
+          parentRoundId: round.id,
+          overtimeSeq: 1,
+        };
+      } else if (hasWinnerTie) {
+        plannedNext = {
+          mode: 'overtime_winner',
+          participants: settlement.winnerAthleteIds,
+          roundNo: session.roundNo,
+          parentRoundId: round.id,
+          overtimeSeq: 1,
+        };
+      }
+    } else if (session.mode === 'overtime_loser') {
+      if (settlement.needLoserOvertime) {
+        plannedNext = {
+          ...session,
+          participants: settlement.loserAthleteIds,
+          overtimeSeq: session.overtimeSeq + 1,
+        };
+      } else if (pendingWinnerIds.length > 1) {
+        plannedNext = {
+          mode: 'overtime_winner',
+          participants: pendingWinnerIds,
+          roundNo: session.roundNo,
+          parentRoundId: session.parentRoundId,
+          overtimeSeq: 1,
+        };
+        setPendingWinnerIds([]);
+      } else {
+        setPendingWinnerIds([]);
+      }
+    } else if (settlement.needWinnerOvertime) {
+      plannedNext = {
+        ...session,
+        participants: settlement.winnerAthleteIds,
+        overtimeSeq: session.overtimeSeq + 1,
+      };
+    } else {
+      setPendingWinnerIds([]);
+    }
+
+    setNextSession(plannedNext);
+
+    if (plannedNext) {
+      if (plannedNext.mode === 'overtime_loser') {
+        setResultHint('先进行最后加时。');
+      } else if (plannedNext.mode === 'overtime_winner') {
+        setResultHint('进入第一加时。');
+      }
+    } else {
+      setResultHint('本轮已完成，可开始下轮。');
+    }
+
+    setStage('result');
+  };
+
+  const openRoundEndSummary = async () => {
+    if (!activeMatch) return;
+
+    const stats = await roundRepo.getRoundStatsByMatch(activeMatch.match.id);
+    const byAthlete = new Map<string, { rounds: number; points: number; cola: number }>();
+
+    stats.forEach((row) => {
+      const prev = byAthlete.get(row.athleteId) ?? { rounds: 0, points: 0, cola: 0 };
+      prev.rounds += 1;
+      prev.points += row.pointDelta;
+      prev.cola += row.colaDelta;
+      byAthlete.set(row.athleteId, prev);
+    });
+
+    const rows = activeMatch.players.map((item) => {
+      const score = byAthlete.get(item.athleteId) ?? { rounds: 0, points: 0, cola: 0 };
+      return {
+        athleteId: item.athleteId,
+        name: athleteMap.get(item.athleteId)?.name ?? item.athleteId,
+        rounds: score.rounds,
+        points: score.points,
+        cola: score.cola,
+      };
+    });
+
+    setRoundEndRows(rows.sort((a, b) => b.points - a.points));
+    setShowRoundEndModal(true);
+  };
+
+  const continueAfterResult = async () => {
+    if (!activeMatch || !session) return;
+
+    if (!nextSession) {
+      setLastSubmission(null);
+      prepareRegularSession({
+        ...activeMatch,
+        nextRoundNo: activeMatch.nextRoundNo + 1,
+      });
+      setActiveMatch((prev) =>
+        prev
+          ? {
+              ...prev,
+              nextRoundNo: prev.nextRoundNo + 1,
+            }
+          : prev,
+      );
+      return;
+    }
+
+    setSession(nextSession);
+    setNextSession(null);
+    setLastSubmission(null);
+    setResultRows([]);
+    initInputs(nextSession.participants, nextSession.mode);
+    setShowRoundEndModal(false);
+    setRoundEndRows([]);
+    setShowMatchEndModal(false);
+    setMatchEndRows([]);
+    setStage('setup');
+  };
+
+  const rollbackLastSubmission = async () => {
+    if (!lastSubmission) return;
+    await roundRepo.deleteRoundWithStats(lastSubmission.roundId);
+    await colaRepo.deleteByRound(lastSubmission.roundId);
+    setSession(lastSubmission.session);
+    setPendingWinnerIds(lastSubmission.pendingWinnerIds);
+    setNextSession(null);
+    setResultRows([]);
+    setResultHint('已撤回本次提交，请重新录入。');
+    setLastSubmission(null);
+    setShowRoundEndModal(false);
+    setRoundEndRows([]);
+    setShowMatchEndModal(false);
+    setMatchEndRows([]);
+    setStage('input');
+  };
+
+  if (stage === 'select') {
+    return (
+      <main className="page">
+        <section className="card">
+          <h1 className="title">开始比赛</h1>
+          <p className="subtitle">开始本局前请先选人（至少 2 名）。</p>
+          <div className="inline-actions">
+            <button className="button button-small button-ghost" type="button" onClick={onExportArchive}>
+              导出存档
+            </button>
+            <button className="button button-small button-ghost" type="button" onClick={openImportDialog}>
+              导入存档
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden-input"
+              onChange={onImportArchiveFile}
+            />
+          </div>
+          {archiveMessage ? <p className="subtitle">{archiveMessage}</p> : null}
+        </section>
+
+        <section className="card">
+          {athletes.length === 0 ? (
+            <p className="subtitle">暂无球员，请先到“人员”页面新增。</p>
+          ) : (
+            <>
+              <ul className="list-reset">
+                {athletes.map((athlete) => (
+                  <li key={athlete.id} className="row-between">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(athlete.id)}
+                        onChange={() => toggleSelect(athlete.id)}
+                      />{' '}
+                      {athlete.name}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              {error ? <p className="error-text">{error}</p> : null}
+              <button
+                className="button"
+                type="button"
+                onClick={createMatch}
+                disabled={isStartingMatch}
+              >
+                {isStartingMatch ? '开局中...' : '开新局'}
+              </button>
+              <p className="subtitle">已选 {selectedIds.length} 人</p>
+            </>
+          )}
+        </section>
+      </main>
+    );
+  }
+
+  const participants = session?.participants ?? [];
+  const title = session
+    ? session.mode === 'regular'
+      ? `第 ${session.roundNo} 轮`
+      : session.mode === 'overtime_loser'
+        ? `第 ${session.roundNo} 轮 · 最后加时 #${session.overtimeSeq}`
+        : `第 ${session.roundNo} 轮 · 第一加时 #${session.overtimeSeq}`
+    : '';
+
+  return (
+    <main className="page">
+      <section className="card">
+        <h1 className="title">比赛进行中</h1>
+        <p className="subtitle">{activeMatch?.match.title}</p>
+        <p className="subtitle">当前阶段：{title}</p>
+        <div className="inline-actions">
+          <button className="button button-small button-ghost" type="button" onClick={onExportArchive}>
+            导出存档
+          </button>
+          <button className="button button-small button-ghost" type="button" onClick={openImportDialog}>
+            导入存档
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden-input"
+            onChange={onImportArchiveFile}
+          />
+        </div>
+        {archiveMessage ? <p className="subtitle">{archiveMessage}</p> : null}
+        <button className="button button-ghost" type="button" onClick={() => void openMatchEndSummary()}>
+          结束本局
+        </button>
+      </section>
+
+      {stage === 'setup' ? (
+        <section className="card">
+          <p className="subtitle">
+            {session?.mode === 'regular' ? '每人投球数（默认 10）' : '加时规则：每人固定投 1 球'}
+          </p>
+          <ul className="list-reset">
+            {participants.map((id) => (
+              <li key={id} className="row-between">
+                <span>{athleteMap.get(id)?.name ?? id}</span>
+                <input
+                  className="number-input"
+                  type="number"
+                  min={session?.mode === 'regular' ? 0 : 1}
+                  max={session?.mode === 'regular' ? undefined : 1}
+                  value={attemptsMap[id] ?? (session?.mode === 'regular' ? 10 : 1)}
+                  onChange={(e) => updateAttempt(id, Number(e.target.value))}
+                  disabled={session?.mode !== 'regular'}
+                />
+              </li>
+            ))}
+          </ul>
+          <button className="button" type="button" onClick={startHitInput}>
+            开始录入命中
+          </button>
+        </section>
+      ) : null}
+
+      {stage === 'input' ? (
+        <section className="card">
+          <p className="subtitle">命中录入（+ / -）</p>
+          <ul className="list-reset">
+            {participants.map((id) => (
+              <li key={id} className="row-between">
+                <span>{athleteMap.get(id)?.name ?? id}</span>
+                <div className="hit-control">
+                  <button
+                    className="button button-small button-ghost"
+                    type="button"
+                    onClick={() => addHit(id, -1)}
+                  >
+                    -
+                  </button>
+                  <span className="hit-value">
+                    {hitsMap[id] ?? 0}/{attemptsMap[id] ?? 0}
+                  </span>
+                  <button
+                    className="button button-small"
+                    type="button"
+                    onClick={() => addHit(id, 1)}
+                  >
+                    +
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <button className="button" type="button" onClick={submitRound}>
+            确认数据
+          </button>
+          <button className="button button-ghost" type="button" onClick={() => setStage('setup')}>
+            返回上一屏
+          </button>
+        </section>
+      ) : null}
+
+      {stage === 'result' ? (
+        <section className="card">
+          <p className="subtitle">本次结果</p>
+          <div className="result-table">
+            <div className="result-row result-head">
+              <span>姓名</span>
+              <span>命中</span>
+              <span>命中率</span>
+              <span>积分</span>
+              <span>可乐</span>
+            </div>
+            {resultRows.map((row) => (
+              <div key={row.athleteId} className="result-row">
+                <span>{row.name}</span>
+                <span className="result-num">
+                  {row.hits}/{row.attempts}
+                </span>
+                <span className="result-num">{(row.hitRate * 100).toFixed(1)}%</span>
+                <span className="result-num">{row.pointDelta > 0 ? `+${row.pointDelta}` : row.pointDelta}</span>
+                <span className="result-num">{row.colaDelta > 0 ? `+${row.colaDelta}` : row.colaDelta}</span>
+              </div>
+            ))}
+          </div>
+          <p className="subtitle">{resultHint}</p>
+          <div className="inline-actions">
+            {nextSession ? (
+              <button className="button" type="button" onClick={continueAfterResult}>
+                继续
+              </button>
+            ) : (
+              <button className="button" type="button" onClick={() => void openRoundEndSummary()}>
+                结束本轮
+              </button>
+            )}
+            <button
+              className="button button-ghost"
+              type="button"
+              onClick={rollbackLastSubmission}
+              disabled={!lastSubmission}
+            >
+              撤回本次提交
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {showRoundEndModal ? (
+        <div className="modal-mask" onClick={() => setShowRoundEndModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <h3 className="title">{activeMatch?.match.title}：本轮结束结算</h3>
+            <div className="result-table">
+              <div className="result-row result-head result-row-4">
+                <span>姓名</span>
+                <span>轮</span>
+                <span>积分</span>
+                <span>可乐</span>
+              </div>
+              {roundEndRows.map((row) => (
+                <div key={row.athleteId} className="result-row result-row-4">
+                  <span>{row.name}</span>
+                  <span className="result-num">{row.rounds}</span>
+                  <span className="result-num">{row.points}</span>
+                  <span className="result-num">{row.cola}</span>
+                </div>
+              ))}
+            </div>
+            <div className="inline-actions">
+              <button className="button" type="button" onClick={continueAfterResult}>
+                开始下轮
+              </button>
+              <button
+                className="button button-ghost"
+                type="button"
+                onClick={() => setShowRoundEndModal(false)}
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showMatchEndModal ? (
+        <div className="modal-mask" onClick={() => setShowMatchEndModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <h3 className="title">{activeMatch?.match.title}：本局结束结算</h3>
+            <div className="result-table">
+              <div className="result-row result-head result-row-4">
+                <span>姓名</span>
+                <span>轮</span>
+                <span>积分</span>
+                <span>可乐</span>
+              </div>
+              {matchEndRows.map((row) => (
+                <div key={row.athleteId} className="result-row result-row-4">
+                  <span>{row.name}</span>
+                  <span className="result-num">{row.rounds}</span>
+                  <span className="result-num">{row.points}</span>
+                  <span className="result-num">{row.cola}</span>
+                </div>
+              ))}
+            </div>
+            <p className="subtitle">说明：同一轮内的常规赛和加时赛，按 1 轮计算。</p>
+            <div className="inline-actions">
+              <button className="button" type="button" onClick={() => void finishMatch()}>
+                确认结束本局
+              </button>
+              <button
+                className="button button-ghost"
+                type="button"
+                onClick={() => setShowMatchEndModal(false)}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </main>
+  );
+}

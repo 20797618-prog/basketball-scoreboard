@@ -1,0 +1,377 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  color: #1f2937;
+  background: #fff7ed;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: linear-gradient(180deg, #fff7ed 0%, #fffbeb 100%);
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding-bottom: 78px;
+}
+
+.install-bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  margin: 10px auto 0;
+  width: min(760px, calc(100% - 28px));
+  border: 1px solid #fdba74;
+  border-radius: 12px;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 8px 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.install-text {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.page {
+  padding: 14px;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 14px;
+  border: 1px solid #fed7aa;
+  box-shadow: 0 6px 18px rgba(251, 146, 60, 0.12);
+  margin-bottom: 10px;
+}
+
+.title {
+  margin: 0 0 6px;
+  font-size: 20px;
+  color: #9a3412;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 14px;
+  color: #7c2d12;
+}
+
+.tabbar {
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  height: 58px;
+  background: #fff;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding: 6px;
+  box-shadow: 0 8px 22px rgba(251, 146, 60, 0.24);
+}
+
+.tab-link {
+  color: #9a3412;
+  text-decoration: none;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tab-link.active {
+  color: #fff;
+  background: linear-gradient(135deg, #f97316, #ea580c);
+}
+
+.button {
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #f97316, #ea580c);
+  color: #fff;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button-ghost {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fdba74;
+}
+
+.button-small {
+  padding: 6px 10px;
+  font-size: 14px;
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.badge {
+  display: inline-flex;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.list-reset {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 12px;
+}
+
+.row-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #fed7aa;
+}
+
+.number-input {
+  width: 88px;
+  border: 1px solid #fdba74;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 14px;
+  background: #fffaf3;
+  color: #7c2d12;
+}
+
+.hit-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hit-value {
+  min-width: 74px;
+  text-align: center;
+  font-weight: 600;
+  color: #9a3412;
+}
+
+.error-text {
+  margin: 4px 0 10px;
+  color: #dc2626;
+  font-size: 13px;
+}
+
+.ok-text {
+  margin: 4px 0 10px;
+  color: #059669;
+  font-size: 13px;
+}
+
+.stack-sm {
+  display: grid;
+  gap: 8px;
+}
+
+.field-label {
+  font-size: 13px;
+  color: #9a3412;
+}
+
+.select-input,
+.text-input {
+  width: 100%;
+  border: 1px solid #fdba74;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 14px;
+  background: #fffaf3;
+  color: #7c2d12;
+}
+
+.row-grid-3 {
+  display: grid;
+  grid-template-columns: 1.5fr 0.8fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.tabs-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.inline-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.hidden-input {
+  display: none;
+}
+
+.ledger-item {
+  padding: 10px 0;
+  border-bottom: 1px dashed #fed7aa;
+}
+
+.result-table {
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 8px 0 10px;
+}
+
+.result-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr 0.8fr 0.8fr;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+  align-items: center;
+  border-bottom: 1px dashed #fed7aa;
+}
+
+.result-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.result-row:last-child {
+  border-bottom: none;
+}
+
+.result-head {
+  background: #fff7ed;
+  color: #9a3412;
+  font-weight: 700;
+}
+
+.result-row-4 {
+  grid-template-columns: 1.4fr 0.8fr 0.9fr 0.9fr;
+}
+
+.ranking-table {
+  border: 1px solid #fed7aa;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fffdf9;
+}
+
+.ranking-row {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px dashed #fed7aa;
+}
+
+.ranking-row:last-child {
+  border-bottom: none;
+}
+
+.ranking-head {
+  background: #fff7ed;
+  color: #9a3412;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.ranking-grid-points,
+.ranking-grid-cola {
+  grid-template-columns: 68px 1fr minmax(78px, auto);
+}
+
+.ranking-grid-rate {
+  grid-template-columns: 68px 1fr minmax(70px, auto) minmax(70px, auto);
+}
+
+.rank-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid #fdba74;
+  background: #fff7ed;
+  color: #9a3412;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.rank-pill.is-first {
+  background: linear-gradient(135deg, #fb923c, #ea580c);
+  color: #fff;
+  border-color: #ea580c;
+}
+
+.rank-pill.is-second {
+  background: #ffedd5;
+  border-color: #fdba74;
+}
+
+.rank-pill.is-third {
+  background: #fff1e6;
+  border-color: #fdba74;
+}
+
+.ranking-name {
+  color: #7c2d12;
+  font-weight: 600;
+}
+
+.ranking-value {
+  color: #9a3412;
+  font-size: 15px;
+}
+
+.ranking-meta {
+  color: #9a3412;
+  font-variant-numeric: tabular-nums;
+}
+
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 50;
+}
+
+.modal-card {
+  width: min(680px, 100%);
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #fed7aa;
+  padding: 14px;
+}

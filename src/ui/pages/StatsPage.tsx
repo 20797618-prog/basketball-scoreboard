@@ -1,0 +1,438 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  allFilterValue,
+  buildPointRanking,
+  buildPointRankingFromRoundLedger,
+  buildRoundDetails,
+  buildWinRateRanking,
+  buildWinRateRankingFromRoundLedger,
+  filterLedger,
+  filterRoundStats,
+  type StatsFilters,
+} from '../../application/usecases/statsService';
+import type { Athlete, ColaLedgerEntry, Match, Round, RoundStat } from '../../domain/types';
+import { AthleteRepositoryDexie } from '../../infrastructure/repositories/local/athleteRepositoryDexie';
+import { ColaLedgerRepositoryDexie } from '../../infrastructure/repositories/local/colaLedgerRepositoryDexie';
+import { appDb } from '../../infrastructure/db/appDb';
+import { MatchRepositoryDexie } from '../../infrastructure/repositories/local/matchRepositoryDexie';
+import { RoundRepositoryDexie } from '../../infrastructure/repositories/local/roundRepositoryDexie';
+import { calculateColaBalances } from '../../application/usecases/colaService';
+
+const athleteRepo = new AthleteRepositoryDexie();
+const matchRepo = new MatchRepositoryDexie();
+const roundRepo = new RoundRepositoryDexie();
+const colaRepo = new ColaLedgerRepositoryDexie();
+
+type RankingTab = 'points' | 'cola' | 'winRate';
+
+function rankTone(rank: number) {
+  if (rank === 1) return 'is-first';
+  if (rank === 2) return 'is-second';
+  if (rank === 3) return 'is-third';
+  return '';
+}
+
+interface DebugCounts {
+  athletes: number;
+  matches: number;
+  rounds: number;
+  roundStats: number;
+  ledger: number;
+}
+
+type ScopeFilter = 'global' | 'month';
+
+export function StatsPage() {
+  const [tab, setTab] = useState<RankingTab>('points');
+  const [athletes, setAthletes] = useState<Athlete[]>([]);
+  const [matches, setMatches] = useState<Match[]>([]);
+  const [rounds, setRounds] = useState<Round[]>([]);
+  const [roundStats, setRoundStats] = useState<RoundStat[]>([]);
+  const [ledger, setLedger] = useState<ColaLedgerEntry[]>([]);
+  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('global');
+  const [monthValue, setMonthValue] = useState('');
+  const [athleteFilterId, setAthleteFilterId] = useState(allFilterValue());
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState('');
+  const [refreshTapCount, setRefreshTapCount] = useState(0);
+  const [debugCounts, setDebugCounts] = useState<DebugCounts>({
+    athletes: 0,
+    matches: 0,
+    rounds: 0,
+    roundStats: 0,
+    ledger: 0,
+  });
+
+  const boot = useCallback(async () => {
+    setIsRefreshing(true);
+    setRefreshMessage('');
+    try {
+      const [aRes, mRes, rRes, rsRes, lRes] = await Promise.allSettled([
+        athleteRepo.listAll(),
+        matchRepo.listAll(),
+        roundRepo.listAllRounds(),
+        roundRepo.listAllRoundStats(),
+        colaRepo.listAll(),
+      ]);
+
+      const a = aRes.status === 'fulfilled' ? aRes.value : [];
+      const m = mRes.status === 'fulfilled' ? mRes.value : [];
+      const r = rRes.status === 'fulfilled' ? rRes.value : [];
+      const rs = rsRes.status === 'fulfilled' ? rsRes.value : [];
+      const l = lRes.status === 'fulfilled' ? lRes.value : [];
+
+      setAthletes(a);
+      setMatches(m);
+      setRounds(r);
+      setRoundStats(rs);
+      setLedger(l);
+
+      const [athletesCount, matchesCount, roundsCount, roundStatsCount, ledgerCount] = await Promise.all([
+        appDb.athletes.count().catch(() => a.length),
+        appDb.matches.count().catch(() => m.length),
+        appDb.rounds.count().catch(() => r.length),
+        appDb.roundStats.count().catch(() => rs.length),
+        appDb.colaLedger.count().catch(() => l.length),
+      ]);
+
+      setDebugCounts({
+        athletes: athletesCount,
+        matches: matchesCount,
+        rounds: roundsCount,
+        roundStats: roundStatsCount,
+        ledger: ledgerCount,
+      });
+
+      const rejected = [aRes, mRes, rRes, rsRes, lRes].filter((x) => x.status === 'rejected');
+      if (rejected.length > 0) {
+        const reason = rejected[0];
+        const detail = reason.status === 'rejected' ? String(reason.reason) : '';
+        setRefreshMessage(`部分数据刷新失败：${detail}`);
+      } else {
+        setRefreshMessage(`已刷新：${new Date().toLocaleTimeString()}`);
+      }
+    } catch (error) {
+      setRefreshMessage(`刷新失败：${String(error)}`);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void boot();
+  }, [boot]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      void boot();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void boot();
+      }
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [boot]);
+
+  const athleteNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    athletes.forEach((a) => map.set(a.id, a.name));
+    return map;
+  }, [athletes]);
+
+  const filters = useMemo<StatsFilters>(
+    () => ({
+      matchId: allFilterValue(),
+      athleteId: athleteFilterId,
+      day: scopeFilter === 'month' ? monthValue : '',
+    }),
+    [scopeFilter, monthValue, athleteFilterId],
+  );
+
+  const filteredStats = useMemo(
+    () => filterRoundStats(roundStats, filters),
+    [roundStats, filters],
+  );
+
+  const filteredLedger = useMemo(
+    () => filterLedger(ledger, filters),
+    [ledger, filters],
+  );
+
+  const pointRanking = useMemo(
+    () =>
+      filteredStats.length > 0
+        ? buildPointRanking(filteredStats)
+        : buildPointRankingFromRoundLedger(filteredLedger),
+    [filteredStats, filteredLedger],
+  );
+  const pointRankingWithAllAthletes = useMemo(() => {
+    const pointMap = new Map(pointRanking.map((row) => [row.athleteId, row.value]));
+    return [...athletes]
+      .map((athlete) => ({
+        athleteId: athlete.id,
+        value: pointMap.get(athlete.id) ?? 0,
+      }))
+      .sort((a, b) => b.value - a.value);
+  }, [athletes, pointRanking]);
+  const colaBalances = useMemo(
+    () => calculateColaBalances(athletes.map((a) => a.id), ledger),
+    [athletes, ledger],
+  );
+
+  const colaRanking = useMemo(
+    () =>
+      [...athletes].sort(
+        (a, b) => (colaBalances[b.id] ?? 0) - (colaBalances[a.id] ?? 0),
+      ),
+    [athletes, colaBalances],
+  );
+  const winRateRanking = useMemo(
+    () =>
+      filteredStats.length > 0
+        ? buildWinRateRanking(filteredStats)
+        : buildWinRateRankingFromRoundLedger(filteredLedger),
+    [filteredStats, filteredLedger],
+  );
+  const winRateRankingWithAllAthletes = useMemo(() => {
+    const winMap = new Map(
+      winRateRanking.map((row) => [row.athleteId, { value: row.value, wins: row.wins ?? 0, rounds: row.rounds ?? 0 }]),
+    );
+    return [...athletes]
+      .map((athlete) => {
+        const item = winMap.get(athlete.id);
+        return {
+          athleteId: athlete.id,
+          value: item?.value ?? 0,
+          wins: item?.wins ?? 0,
+          rounds: item?.rounds ?? 0,
+        };
+      })
+      .sort((a, b) => b.value - a.value);
+  }, [athletes, winRateRanking]);
+
+  const details = useMemo(
+    () => buildRoundDetails({ stats: filteredStats, rounds, matches }),
+    [filteredStats, rounds, matches],
+  );
+
+  const handleManualRefresh = () => {
+    setRefreshTapCount((prev) => prev + 1);
+    setRefreshMessage('手动刷新中...');
+    void boot();
+  };
+
+  return (
+    <main className="page">
+      <section className="card">
+        <h1 className="title">排行</h1>
+        <p className="subtitle">三榜单 + 按全局/按月/按人筛选 + 详细轮次记录。</p>
+        <div className="inline-actions">
+          <button
+            className="button button-small button-ghost"
+            type="button"
+            onClick={handleManualRefresh}
+          >
+            {isRefreshing ? '刷新中...' : '刷新数据'}
+          </button>
+          <span className="subtitle">轮次记录：{roundStats.length} 条</span>
+          <span className="subtitle">筛选后：{filteredStats.length} 条</span>
+          <span className="subtitle">可乐流水：{ledger.length} 条</span>
+        </div>
+        <div className="inline-actions">
+          <button
+            className="button button-small button-ghost"
+            type="button"
+            onClick={() => window.location.reload()}
+          >
+            强制重载页面
+          </button>
+        </div>
+        {refreshMessage ? <p className="subtitle">{refreshMessage}</p> : null}
+        <p className="subtitle">
+          刷新点击：{refreshTapCount} 次｜DB计数：人 {debugCounts.athletes} / 局 {debugCounts.matches} / 轮{' '}
+          {debugCounts.rounds} / 轮明细 {debugCounts.roundStats} / 流水 {debugCounts.ledger}
+        </p>
+        {filteredStats.length === 0 && (scopeFilter === 'month' || filters.athleteId !== allFilterValue()) ? (
+          <p className="subtitle">当前已启用筛选条件，可点“重置筛选”查看全部数据。</p>
+        ) : null}
+        {roundStats.length === 0 && ledger.some((x) => x.type === 'round_reward') ? (
+          <p className="subtitle">检测到历史轮次明细缺失，积分榜/胜率榜已按比赛可乐流水兼容计算。</p>
+        ) : null}
+      </section>
+
+      <section className="card">
+        <p className="subtitle">筛选</p>
+        <div className="stack-sm">
+          <label className="field-label">范围</label>
+          <select
+            className="select-input"
+            value={scopeFilter}
+            onChange={(e) => setScopeFilter(e.target.value as ScopeFilter)}
+          >
+            <option value="global">全局</option>
+            <option value="month">按月</option>
+          </select>
+
+          {scopeFilter === 'month' ? (
+            <>
+              <label className="field-label">月份</label>
+              <select
+                className="select-input"
+                value={monthValue}
+                onChange={(e) => setMonthValue(e.target.value)}
+              >
+                <option value="">请选择月份</option>
+                {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
+                  <option key={month} value={String(month)}>
+                    {month}月
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
+
+          <label className="field-label">人员</label>
+          <select
+            className="select-input"
+            value={athleteFilterId}
+            onChange={(e) => setAthleteFilterId(e.target.value)}
+          >
+            <option value={allFilterValue()}>全部人</option>
+            {athletes.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+
+          <button
+            className="button button-ghost"
+            type="button"
+            onClick={() => {
+              setScopeFilter('global');
+              setMonthValue('');
+              setAthleteFilterId(allFilterValue());
+            }}
+          >
+            重置筛选
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="tabs-row">
+          <button
+            className={tab === 'points' ? 'button button-small' : 'button button-small button-ghost'}
+            type="button"
+            onClick={() => setTab('points')}
+          >
+            积分榜
+          </button>
+          <button
+            className={tab === 'cola' ? 'button button-small' : 'button button-small button-ghost'}
+            type="button"
+            onClick={() => setTab('cola')}
+          >
+            可乐榜
+          </button>
+          <button
+            className={tab === 'winRate' ? 'button button-small' : 'button button-small button-ghost'}
+            type="button"
+            onClick={() => setTab('winRate')}
+          >
+            胜率榜
+          </button>
+        </div>
+
+        {tab === 'points' ? (
+          <div className="ranking-table">
+            <div className="ranking-row ranking-head ranking-grid-points">
+              <span>名次</span>
+              <span>球员</span>
+              <span className="result-num">积分</span>
+            </div>
+            {pointRankingWithAllAthletes.length === 0 ? <p className="subtitle">暂无数据</p> : null}
+            {pointRankingWithAllAthletes.map((row, index) => (
+              <div key={row.athleteId} className="ranking-row ranking-grid-points">
+                <span className={`rank-pill ${rankTone(index + 1)}`}>#{index + 1}</span>
+                <span className="ranking-name">{athleteNameMap.get(row.athleteId) ?? row.athleteId}</span>
+                <strong className="result-num ranking-value">{row.value}</strong>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {tab === 'cola' ? (
+          <div className="ranking-table">
+            <div className="ranking-row ranking-head ranking-grid-cola">
+              <span>名次</span>
+              <span>球员</span>
+              <span className="result-num">可乐</span>
+            </div>
+            {colaRanking.length === 0 ? <p className="subtitle">暂无数据</p> : null}
+            {colaRanking.map((row, index) => (
+              <div key={row.id} className="ranking-row ranking-grid-cola">
+                <span className={`rank-pill ${rankTone(index + 1)}`}>#{index + 1}</span>
+                <span className="ranking-name">{row.name}</span>
+                <strong className="result-num ranking-value">{colaBalances[row.id] ?? 0} 瓶</strong>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {tab === 'winRate' ? (
+          <div className="ranking-table">
+            <div className="ranking-row ranking-head ranking-grid-rate">
+              <span>名次</span>
+              <span>球员</span>
+              <span className="result-num">胜率</span>
+              <span className="result-num">胜/轮</span>
+            </div>
+            {winRateRankingWithAllAthletes.length === 0 ? <p className="subtitle">暂无数据</p> : null}
+            {winRateRankingWithAllAthletes.map((row, index) => (
+              <div key={row.athleteId} className="ranking-row ranking-grid-rate">
+                <span className={`rank-pill ${rankTone(index + 1)}`}>#{index + 1}</span>
+                <span className="ranking-name">{athleteNameMap.get(row.athleteId) ?? row.athleteId}</span>
+                <strong className="result-num ranking-value">{(row.value * 100).toFixed(1)}%</strong>
+                <span className="result-num ranking-meta">
+                  {row.wins}/{row.rounds}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="card">
+        <p className="subtitle">详细轮次记录（筛选后）</p>
+        {details.length === 0 ? (
+          <p className="subtitle">暂无记录。</p>
+        ) : (
+          <ul className="list-reset">
+            {details.map((row) => (
+              <li key={row.key} className="ledger-item">
+                <div>
+                  {athleteNameMap.get(row.athleteId) ?? row.athleteId} · {row.matchTitle}
+                </div>
+                <div className="subtitle">{row.roundLabel}</div>
+                <div className="subtitle">
+                  {row.hits}/{row.attempts}，命中率 {(row.hitRate * 100).toFixed(1)}%，积分 {row.pointDelta}，可乐{' '}
+                  {row.colaDelta}
+                </div>
+                <div className="subtitle">{new Date(row.createdAt).toLocaleString()}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </main>
+  );
+}
