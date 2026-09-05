@@ -1,0 +1,8 @@
+name = "scoreboard-sync-api"
+main = "src/index.ts"
+compatibility_date = "2026-09-05"
+
+[[d1_databases]]
+binding = "SYNC_DB"
+database_name = "basketball-sync-db"
+database_id = "e79aa228-ff25-4edc-8fc8-cf0e38516962"
