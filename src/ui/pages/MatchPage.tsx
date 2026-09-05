@@ -16,6 +16,10 @@ import { AthleteRepositoryDexie } from '../../infrastructure/repositories/local/
 import { ColaLedgerRepositoryDexie } from '../../infrastructure/repositories/local/colaLedgerRepositoryDexie';
 import { MatchRepositoryDexie } from '../../infrastructure/repositories/local/matchRepositoryDexie';
 import { RoundRepositoryDexie } from '../../infrastructure/repositories/local/roundRepositoryDexie';
+import {
+  pushToCloud,
+  pullFromCloud,
+} from '../../infrastructure/cloudbase/syncService';
 import { createId } from '../../shared/createId';
 
 interface ActiveMatchState {
@@ -85,6 +89,10 @@ export function MatchPage() {
   const [resultHint, setResultHint] = useState('');
   const [error, setError] = useState('');
   const [archiveMessage, setArchiveMessage] = useState('');
+  const [syncMessage, setSyncMessage] = useState('');
+  const [currentSyncCode, setCurrentSyncCode] = useState('');
+  const [syncCodeInput, setSyncCodeInput] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
   const [lastSubmission, setLastSubmission] = useState<LastSubmissionState | null>(null);
   const [isStartingMatch, setIsStartingMatch] = useState(false);
   const [showRoundEndModal, setShowRoundEndModal] = useState(false);
@@ -259,6 +267,64 @@ export function MatchPage() {
       setArchiveMessage('导入失败：文件格式错误或版本不支持。');
     } finally {
       event.target.value = '';
+    }
+  };
+
+  const onPushToCloud = async () => {
+    setSyncMessage('');
+    setIsSyncing(true);
+    try {
+      const result = await pushToCloud(syncCodeInput);
+      const total =
+        result.counts.athletes +
+        result.counts.matches +
+        result.counts.matchPlayers +
+        result.counts.rounds +
+        result.counts.roundStats +
+        result.counts.colaLedger;
+      setCurrentSyncCode(result.syncCode);
+      setSyncCodeInput(result.syncCode);
+      setSyncMessage(
+        `已备份到云端（共 ${total} 条）。恢复码：${result.syncCode}（请记住，换设备/清缓存后凭此码恢复）。`,
+      );
+    } catch (err) {
+      setSyncMessage(`备份失败：${String(err)}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const onPullFromCloud = async () => {
+    const code = (syncCodeInput || '').trim().toUpperCase();
+    if (!code) {
+      setSyncMessage('请先输入恢复码（备份时显示的那串 6 位字符）。');
+      return;
+    }
+
+    const ok = window.confirm(
+      '从云端恢复会覆盖当前本地数据，是否继续？',
+    );
+    if (!ok) return;
+
+    setSyncMessage('');
+    setIsSyncing(true);
+    try {
+      const result = await pullFromCloud(code);
+      const total =
+        result.counts.athletes +
+        result.counts.matches +
+        result.counts.matchPlayers +
+        result.counts.rounds +
+        result.counts.roundStats +
+        result.counts.colaLedger;
+      setCurrentSyncCode(code);
+      setSyncMessage(`已从云端恢复（共 ${total} 条），正在刷新…`);
+      setSelectedIds([]);
+      await boot();
+    } catch (err) {
+      setSyncMessage(`恢复失败：${String(err)}`);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -558,6 +624,22 @@ export function MatchPage() {
             <button className="button button-small button-ghost" type="button" onClick={openImportDialog}>
               导入存档
             </button>
+            <button
+              className="button button-small button-ghost"
+              type="button"
+              onClick={() => void onPushToCloud()}
+              disabled={isSyncing}
+            >
+              {isSyncing ? '同步中…' : '备份到云端'}
+            </button>
+            <button
+              className="button button-small button-ghost"
+              type="button"
+              onClick={() => void onPullFromCloud()}
+              disabled={isSyncing}
+            >
+              从云端恢复
+            </button>
             <input
               ref={importInputRef}
               type="file"
@@ -567,6 +649,20 @@ export function MatchPage() {
             />
           </div>
           {archiveMessage ? <p className="subtitle">{archiveMessage}</p> : null}
+          {syncMessage ? <p className="subtitle">{syncMessage}</p> : null}
+          <div className="sync-code-row">
+            <input
+              className="text-input"
+              type="text"
+              placeholder="恢复码（如 123456，备份/恢复共用）"
+              value={syncCodeInput}
+              onChange={(e) => setSyncCodeInput(e.target.value.toUpperCase())}
+              maxLength={12}
+            />
+            {currentSyncCode ? (
+              <span className="sync-code-hint">当前恢复码：{currentSyncCode}</span>
+            ) : null}
+          </div>
         </section>
 
         <section className="card">
@@ -627,6 +723,22 @@ export function MatchPage() {
           <button className="button button-small button-ghost" type="button" onClick={openImportDialog}>
             导入存档
           </button>
+          <button
+            className="button button-small button-ghost"
+            type="button"
+            onClick={() => void onPushToCloud()}
+            disabled={isSyncing}
+          >
+            {isSyncing ? '同步中…' : '备份到云端'}
+          </button>
+          <button
+            className="button button-small button-ghost"
+            type="button"
+            onClick={() => void onPullFromCloud()}
+            disabled={isSyncing}
+          >
+            从云端恢复
+          </button>
           <input
             ref={importInputRef}
             type="file"
@@ -636,6 +748,20 @@ export function MatchPage() {
           />
         </div>
         {archiveMessage ? <p className="subtitle">{archiveMessage}</p> : null}
+        {syncMessage ? <p className="subtitle">{syncMessage}</p> : null}
+        <div className="sync-code-row">
+          <input
+            className="text-input"
+            type="text"
+            placeholder="恢复码（如 123456，备份/恢复共用）"
+            value={syncCodeInput}
+            onChange={(e) => setSyncCodeInput(e.target.value.toUpperCase())}
+            maxLength={12}
+          />
+          {currentSyncCode ? (
+            <span className="sync-code-hint">当前恢复码：{currentSyncCode}</span>
+          ) : null}
+        </div>
         <button className="button button-ghost" type="button" onClick={() => void openMatchEndSummary()}>
           结束本局
         </button>
@@ -644,21 +770,33 @@ export function MatchPage() {
       {stage === 'setup' ? (
         <section className="card">
           <p className="subtitle">
-            {session?.mode === 'regular' ? '每人投球数（默认 10）' : '加时规则：每人固定投 1 球'}
+            {session?.mode === 'regular' ? '每人投球数（默认 10，可用 + / - 调整）' : '加时规则：每人固定投 1 球'}
           </p>
           <ul className="list-reset">
             {participants.map((id) => (
               <li key={id} className="row-between">
                 <span>{athleteMap.get(id)?.name ?? id}</span>
-                <input
-                  className="number-input"
-                  type="number"
-                  min={session?.mode === 'regular' ? 0 : 1}
-                  max={session?.mode === 'regular' ? undefined : 1}
-                  value={attemptsMap[id] ?? (session?.mode === 'regular' ? 10 : 1)}
-                  onChange={(e) => updateAttempt(id, Number(e.target.value))}
-                  disabled={session?.mode !== 'regular'}
-                />
+                <div className="hit-control">
+                  <button
+                    className="button button-small button-ghost"
+                    type="button"
+                    onClick={() => updateAttempt(id, (attemptsMap[id] ?? 10) - 1)}
+                    disabled={session?.mode !== 'regular'}
+                  >
+                    -
+                  </button>
+                  <span className="hit-value">
+                    {attemptsMap[id] ?? (session?.mode === 'regular' ? 10 : 1)}
+                  </span>
+                  <button
+                    className="button button-small"
+                    type="button"
+                    onClick={() => updateAttempt(id, (attemptsMap[id] ?? 10) + 1)}
+                    disabled={session?.mode !== 'regular'}
+                  >
+                    +
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

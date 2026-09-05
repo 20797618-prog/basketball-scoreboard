@@ -3,7 +3,7 @@ import { calculateColaBalances } from '../../application/usecases/colaService';
 import { AthleteRepositoryDexie } from '../../infrastructure/repositories/local/athleteRepositoryDexie';
 import { ColaLedgerRepositoryDexie } from '../../infrastructure/repositories/local/colaLedgerRepositoryDexie';
 import { RoundRepositoryDexie } from '../../infrastructure/repositories/local/roundRepositoryDexie';
-import type { Athlete } from '../../domain/types';
+import type { Athlete, Round } from '../../domain/types';
 
 const athleteRepo = new AthleteRepositoryDexie();
 const roundRepo = new RoundRepositoryDexie();
@@ -24,23 +24,45 @@ export function PeoplePage() {
   }, []);
 
   const refresh = async () => {
-    const [athletes, stats, ledger] = await Promise.all([
+    const [athletes, stats, ledger, rounds] = await Promise.all([
       athleteRepo.listAll(),
       roundRepo.listAllRoundStats(),
       colaRepo.listAll(),
+      roundRepo.listAllRounds() as Promise<Round[]>,
     ]);
 
     setList(athletes);
 
     const pointRecord: Record<string, number> = {};
-    const winTmp: Record<string, { wins: number; rounds: number }> = {};
+    // roundId → 轮次键（matchId-roundNo）：同一场比赛同一轮号视为同一轮
+    // （同一轮多次加时合并为 1 轮计胜率）。
+    const roundKeyByRoundId = new Map<string, string>();
+    for (const r of rounds) {
+      roundKeyByRoundId.set(r.id, `${r.matchId}-${r.roundNo}`);
+    }
+
+    // 按 (athleteId, 轮次键) 聚合：同一轮同一运动员无论加时多少次都算一轮；
+    // 最后 pointDelta > 0 算赢，加时先输后赢的情况也按赢算。
+    const outcomes = new Map<string, 'win' | 'loss'>(); // key = athleteId|roundKey
 
     stats.forEach((row) => {
       pointRecord[row.athleteId] = (pointRecord[row.athleteId] ?? 0) + row.pointDelta;
-      const item = winTmp[row.athleteId] ?? { wins: 0, rounds: 0 };
+      const rk = roundKeyByRoundId.get(row.roundId) ?? row.roundId;
+      const key = `${row.athleteId}|${rk}`;
+      if (row.pointDelta > 0) {
+        outcomes.set(key, 'win');
+      } else if (outcomes.get(key) !== 'win') {
+        outcomes.set(key, 'loss');
+      }
+    });
+
+    const winTmp: Record<string, { wins: number; rounds: number }> = {};
+    outcomes.forEach((outcome, key) => {
+      const [athleteId] = key.split('|');
+      const item = winTmp[athleteId] ?? { wins: 0, rounds: 0 };
       item.rounds += 1;
-      if (row.pointDelta > 0) item.wins += 1;
-      winTmp[row.athleteId] = item;
+      if (outcome === 'win') item.wins += 1;
+      winTmp[athleteId] = item;
     });
 
     const winRateRecord: Record<string, string> = {};

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  buildConsumeEntry,
   buildTransferEntries,
   calculateColaBalances,
 } from '../../application/usecases/colaService';
@@ -31,9 +30,7 @@ export function ColaPage() {
     { toAthleteId: '', amount: 1 },
   ]);
   const [transferNote, setTransferNote] = useState('');
-  const [consumeTargetId, setConsumeTargetId] = useState('');
-  const [consumeAmount, setConsumeAmount] = useState(1);
-  const [consumeNote, setConsumeNote] = useState('');
+  const [showColaLedger, setShowColaLedger] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -53,7 +50,6 @@ export function ColaPage() {
     if (activeAthletes.length > 0) {
       const firstId = activeAthletes[0].id;
       setTransferFromId((prev) => prev || firstId);
-      setConsumeTargetId((prev) => prev || firstId);
       setTransferRows((prev) =>
         prev.map((item, index) =>
           index === 0 && !item.toAthleteId
@@ -126,26 +122,6 @@ export function ColaPage() {
     setSuccess('批量转账已完成。');
   };
 
-  const submitConsume = async () => {
-    setError('');
-    setSuccess('');
-
-    const safeAmount = Math.max(0, Math.floor(consumeAmount || 0));
-    if (!consumeTargetId) {
-      setError('请选择消耗对象。');
-      return;
-    }
-    if (safeAmount <= 0) {
-      setError('消耗数量必须大于 0。');
-      return;
-    }
-
-    const entry = buildConsumeEntry(consumeTargetId, safeAmount, consumeNote.trim() || undefined);
-    await colaRepo.append([entry]);
-    setEntries(await colaRepo.listAll());
-    setSuccess('可乐消耗已记录。');
-  };
-
   const describeEntry = (entry: ColaLedgerEntry) => {
     const fromName = entry.fromAthleteId
       ? (athleteMap.get(entry.fromAthleteId)?.name ?? entry.fromAthleteId)
@@ -170,7 +146,7 @@ export function ColaPage() {
     <main className="page">
       <section className="card">
         <h1 className="title">可乐市场</h1>
-        <p className="subtitle">支持批量转账、清零/消耗、流水查询（余额可为负）。</p>
+        <p className="subtitle">支持批量转账、流水查询（余额可为负）。</p>
       </section>
 
       <section className="card">
@@ -264,41 +240,13 @@ export function ColaPage() {
       </section>
 
       <section className="card">
-        <p className="subtitle">清零/消耗</p>
-        <div className="stack-sm">
-          <label className="field-label">对象</label>
-          <select
-            className="select-input"
-            value={consumeTargetId}
-            onChange={(e) => setConsumeTargetId(e.target.value)}
+        <div className="inline-actions">
+          <button
+            className="button button-small button-ghost"
+            type="button"
+            onClick={() => setShowColaLedger((prev) => !prev)}
           >
-            <option value="">请选择</option>
-            {athletes.map((athlete) => (
-              <option key={athlete.id} value={athlete.id}>
-                {athlete.name}
-              </option>
-            ))}
-          </select>
-
-          <label className="field-label">消耗数量</label>
-          <input
-            className="number-input"
-            type="number"
-            min={1}
-            value={consumeAmount}
-            onChange={(e) => setConsumeAmount(Number(e.target.value) || 0)}
-          />
-
-          <label className="field-label">备注（可选）</label>
-          <input
-            className="text-input"
-            value={consumeNote}
-            onChange={(e) => setConsumeNote(e.target.value)}
-            placeholder="例如：买水喝啦"
-          />
-
-          <button className="button" type="button" onClick={submitConsume}>
-            确认消耗
+            {showColaLedger ? '收起可乐流水' : `展开可乐流水（${entries.length} 条）`}
           </button>
         </div>
       </section>
@@ -307,7 +255,9 @@ export function ColaPage() {
         {error ? <p className="error-text">{error}</p> : null}
         {success ? <p className="ok-text">{success}</p> : null}
         <p className="subtitle">可乐流水（最新在前）</p>
-        {entries.length === 0 ? (
+        {!showColaLedger ? (
+          <p className="subtitle">已折叠，点击上方“展开可乐流水”查看。</p>
+        ) : entries.length === 0 ? (
           <p className="subtitle">暂无流水。</p>
         ) : (
           <ul className="list-reset">

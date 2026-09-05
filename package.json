@@ -10,13 +10,14 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "dexie": "^4.0.8",
+    "@cloudbase/js-sdk": "^3.8.2",
     "dayjs": "^1.11.13",
+    "dexie": "^4.0.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
-    "zustand": "^4.5.5",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "zustand": "^4.5.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

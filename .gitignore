@@ -1,5 +1,8 @@
 node_modules
 dist
+dist 2
+dist.zip
+*.tsbuildinfo
 .vscode
 .DS_Store
 *.local

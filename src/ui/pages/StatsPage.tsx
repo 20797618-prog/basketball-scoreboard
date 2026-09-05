@@ -6,9 +6,12 @@ import {
   buildRoundDetails,
   buildWinRateRanking,
   buildWinRateRankingFromRoundLedger,
+  buildHitRateRanking,
+  buildDailyHitRate,
   filterLedger,
   filterRoundStats,
   type StatsFilters,
+  type DailyHitRateRow,
 } from '../../application/usecases/statsService';
 import type { Athlete, ColaLedgerEntry, Match, Round, RoundStat } from '../../domain/types';
 import { AthleteRepositoryDexie } from '../../infrastructure/repositories/local/athleteRepositoryDexie';
@@ -23,7 +26,7 @@ const matchRepo = new MatchRepositoryDexie();
 const roundRepo = new RoundRepositoryDexie();
 const colaRepo = new ColaLedgerRepositoryDexie();
 
-type RankingTab = 'points' | 'cola' | 'winRate';
+type RankingTab = 'points' | 'cola' | 'winRate' | 'hitRate';
 
 function rankTone(rank: number) {
   if (rank === 1) return 'is-first';
@@ -52,6 +55,7 @@ export function StatsPage() {
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('global');
   const [monthValue, setMonthValue] = useState('');
   const [athleteFilterId, setAthleteFilterId] = useState(allFilterValue());
+  const [showPointLedger, setShowPointLedger] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshMessage, setRefreshMessage] = useState('');
   const [refreshTapCount, setRefreshTapCount] = useState(0);
@@ -195,11 +199,18 @@ export function StatsPage() {
     [athletes, colaBalances],
   );
   const winRateRanking = useMemo(
-    () =>
-      filteredStats.length > 0
-        ? buildWinRateRanking(filteredStats)
-        : buildWinRateRankingFromRoundLedger(filteredLedger),
-    [filteredStats, filteredLedger],
+    () => {
+      // roundId → 轮次键（matchId-roundNo）：同一场比赛的同一轮号视为同一轮
+      // （同一轮多次加时合并为 1 轮计胜率）。
+      const roundKeyByRoundId = new Map<string, string>();
+      for (const r of rounds) {
+        roundKeyByRoundId.set(r.id, `${r.matchId}-${r.roundNo}`);
+      }
+      return filteredStats.length > 0
+        ? buildWinRateRanking(filteredStats, roundKeyByRoundId)
+        : buildWinRateRankingFromRoundLedger(filteredLedger, roundKeyByRoundId);
+    },
+    [filteredStats, filteredLedger, rounds],
   );
   const winRateRankingWithAllAthletes = useMemo(() => {
     const winMap = new Map(
@@ -221,6 +232,36 @@ export function StatsPage() {
   const details = useMemo(
     () => buildRoundDetails({ stats: filteredStats, rounds, matches }),
     [filteredStats, rounds, matches],
+  );
+
+  const hitRateRanking = useMemo(
+    () => buildHitRateRanking(filteredStats),
+    [filteredStats],
+  );
+
+  const hitRateRankingWithAllAthletes = useMemo(() => {
+    const map = new Map(
+      hitRateRanking.map((row) => [
+        row.athleteId,
+        { hits: row.hits, attempts: row.attempts, rate: row.rate },
+      ]),
+    );
+    return [...athletes]
+      .map((athlete) => {
+        const item = map.get(athlete.id);
+        return {
+          athleteId: athlete.id,
+          hits: item?.hits ?? 0,
+          attempts: item?.attempts ?? 0,
+          rate: item?.rate ?? 0,
+        };
+      })
+      .sort((a, b) => b.rate - a.rate);
+  }, [athletes, hitRateRanking]);
+
+  const dailyHitRate = useMemo(
+    () => buildDailyHitRate(filteredStats),
+    [filteredStats],
   );
 
   const handleManualRefresh = () => {
@@ -350,6 +391,13 @@ export function StatsPage() {
           >
             胜率榜
           </button>
+          <button
+            className={tab === 'hitRate' ? 'button button-small' : 'button button-small button-ghost'}
+            type="button"
+            onClick={() => setTab('hitRate')}
+          >
+            命中榜
+          </button>
         </div>
 
         {tab === 'points' ? (
@@ -409,11 +457,74 @@ export function StatsPage() {
             ))}
           </div>
         ) : null}
+
+        {tab === 'hitRate' ? (
+          <div className="ranking-table">
+            <div className="ranking-row ranking-head ranking-grid-rate">
+              <span>名次</span>
+              <span>球员</span>
+              <span className="result-num">命中率</span>
+              <span className="result-num">命中/投篮</span>
+            </div>
+            {hitRateRankingWithAllAthletes.length === 0 ? <p className="subtitle">暂无数据</p> : null}
+            {hitRateRankingWithAllAthletes.map((row, index) => (
+              <div key={row.athleteId} className="ranking-row ranking-grid-rate">
+                <span className={`rank-pill ${rankTone(index + 1)}`}>#{index + 1}</span>
+                <span className="ranking-name">{athleteNameMap.get(row.athleteId) ?? row.athleteId}</span>
+                <strong className="result-num ranking-value">{(row.rate * 100).toFixed(1)}%</strong>
+                <span className="result-num ranking-meta">
+                  {row.hits}/{row.attempts}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       <section className="card">
-        <p className="subtitle">详细轮次记录（筛选后）</p>
-        {details.length === 0 ? (
+        <p className="title">每日命中率</p>
+        <p className="subtitle">按天汇总命中情况，折线图展示趋势，可配合上方筛选查看单个人。</p>
+        {dailyHitRate.length === 0 ? (
+          <p className="subtitle">暂无数据。</p>
+        ) : (
+          <>
+            <DailyHitRateChart rows={dailyHitRate} />
+            <div className="ranking-table">
+              <div className="ranking-row ranking-head daily-grid">
+                <span>日期</span>
+                <span>命中/投篮</span>
+                <span className="result-num">命中率</span>
+                <span className="result-num">人数</span>
+              </div>
+              {dailyHitRate.map((row) => (
+                <div key={row.day} className="ranking-row daily-grid">
+                  <span className="ranking-name">{row.dayLabel}</span>
+                  <span className="ranking-meta">
+                    {row.hits}/{row.attempts}
+                  </span>
+                  <strong className="result-num ranking-value">{(row.rate * 100).toFixed(1)}%</strong>
+                  <span className="result-num ranking-meta">{row.athleteCount} 人</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="card">
+        <div className="inline-actions">
+          <p className="subtitle">积分流水（筛选后）</p>
+          <button
+            className="button button-small button-ghost"
+            type="button"
+            onClick={() => setShowPointLedger((prev) => !prev)}
+          >
+            {showPointLedger ? '收起积分流水' : `展开积分流水（${details.length} 条）`}
+          </button>
+        </div>
+        {!showPointLedger ? (
+          <p className="subtitle">已折叠，点击“展开积分流水”查看。</p>
+        ) : details.length === 0 ? (
           <p className="subtitle">暂无记录。</p>
         ) : (
           <ul className="list-reset">
@@ -434,5 +545,60 @@ export function StatsPage() {
         )}
       </section>
     </main>
+  );
+}
+
+function DailyHitRateChart({ rows }: { rows: DailyHitRateRow[] }) {
+  const W = 600;
+  const H = 180;
+  const padL = 44;
+  const padR = 16;
+  const padT = 14;
+  const padB = 28;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const maxRate = 1;
+  const xFor = (i: number) =>
+    rows.length <= 1 ? padL + plotW / 2 : padL + (plotW * i) / (rows.length - 1);
+  const yFor = (rate: number) => padT + plotH - (rate / maxRate) * plotH;
+
+  const points = rows.map((row, i) => `${xFor(i).toFixed(1)},${yFor(row.rate).toFixed(1)}`).join(' ');
+  const gridLines = [0, 0.25, 0.5, 0.75, 1];
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="daily-chart" role="img" aria-label="每日命中率折线图">
+      {gridLines.map((g) => {
+        const y = yFor(g);
+        return (
+          <g key={g}>
+            <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="#1c2630" strokeWidth="0.5" />
+            <text x={padL - 6} y={y + 4} textAnchor="end" fontSize="11" fill="#4c5966">
+              {Math.round(g * 100)}
+            </text>
+          </g>
+        );
+      })}
+      {rows.length > 0 ? (
+        <>
+          <polyline
+            points={points}
+            fill="none"
+            stroke="#00e6a8"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          {rows.map((row, i) => (
+            <g key={row.day}>
+              <circle cx={xFor(i)} cy={yFor(row.rate)} r="4" fill="#00e6a8" />
+              <text x={xFor(i)} y={H - 8} textAnchor="middle" fontSize="11" fill="#8b98a5">
+                {row.dayLabel}
+              </text>
+            </g>
+          ))}
+        </>
+      ) : null}
+    </svg>
   );
 }
