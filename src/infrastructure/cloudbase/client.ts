@@ -1,10 +1,9 @@
 /**
  * Cloudflare Worker 同步 API 地址。
- * 可通过 VITE_SYNC_API_BASE 覆盖；不配置时使用默认 workers.dev 地址。
+ * 可通过 VITE_SYNC_API_BASE 覆盖；默认走同域相对路径（由 Pages 代理转发）。
  */
 export const SYNC_API_BASE =
-  (import.meta.env.VITE_SYNC_API_BASE || '').trim() ||
-  'https://scoreboard-sync-api.20797618.workers.dev';
+  (import.meta.env.VITE_SYNC_API_BASE || '').trim();
 
 // 恢复码在 localStorage 中的持久化 key（用于同一设备复用恢复码）
 const SYNC_CODE_STORAGE_KEY = 'scoreboard_sync_code';
