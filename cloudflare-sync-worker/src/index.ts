@@ -40,6 +40,21 @@ const json = (data: unknown, status = 200): Response =>
 
 const asBoolInt = (value: unknown): number => (value ? 1 : 0);
 
+/**
+ * 共享空间码：同一球队的所有成员读写同一份数据（比赛记录、可乐账本共享）。
+ *
+ * 为什么不直接用登录邮箱：用邮箱做归属键时，每个人各存一份，
+ * 导致「可乐 A 发起 → B 确认」跨账号无法工作（B 看不到 A 的数据）。
+ * 现在数据归属固定为这个共享空间，登录身份只用来区分「我是谁」
+ * （配合球员认领映射，转让确认才有意义）。
+ *
+ * 将来若要多支球队各自独立，把这个常量换成"每队一个空间码 + 加入机制"即可。
+ */
+const SHARED_SPACE_CODE = 'team';
+
+/** 当前请求应对应的数据归属键。 */
+const resolveSyncCode = (_session: { email?: string }): string => SHARED_SPACE_CODE;
+
 const chunks = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) {
@@ -394,10 +409,19 @@ async function verifyWorkBuddyToken(env: Env, wbToken: string): Promise<WbVerify
       headers: {
         'x-wb-webapp-access-key': env.WB_PUBLISHABLE_KEY,
         Authorization: `Bearer ${wbToken}`,
+        // 数据面按精确 Origin 匹配，服务端调用时显式带上应用自身的 Origin
+        Origin: env.WB_AUTH_ENDPOINT,
       },
     });
     if (!res.ok) {
-      return { error: `WorkBuddy 身份校验失败（HTTP ${res.status}）` };
+      // 带上上游响应体，便于定位是「凭据被拒」还是「用户令牌被拒」
+      let detail = '';
+      try {
+        detail = (await res.text()).slice(0, 200);
+      } catch {
+        // ignore
+      }
+      return { error: `WorkBuddy 身份校验失败（HTTP ${res.status}）：${detail}` };
     }
     const data: any = await res.json();
     const uid = data?.user?.id ?? data?.id ?? data?.user_id ?? '';
@@ -560,7 +584,7 @@ export default {
       if (!sess) {
         return json({ error: '未登录，请先登录' }, 401);
       }
-      const syncCode = sess.email;
+      const syncCode = resolveSyncCode(sess);
 
       const data = payload?.data ?? {};
       const athletes = Array.isArray(data.athletes) ? data.athletes : [];
@@ -605,7 +629,7 @@ export default {
       if (!sess) {
         return json({ error: '未登录，请先登录' }, 401);
       }
-      const syncCode = sess.email;
+      const syncCode = resolveSyncCode(sess);
 
       try {
         const [athletes, matches, matchPlayers, rounds, roundStats, colaLedger, athleteClaims, colaTransfers] = await Promise.all([
