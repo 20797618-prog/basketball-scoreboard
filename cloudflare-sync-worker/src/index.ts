@@ -428,6 +428,10 @@ async function readJsonBody(request: Request): Promise<any> {
 
 /** POST /api/auth/workbuddy-exchange —— 用微信登录令牌换取本站会话。 */
 async function workbuddyExchange(request: Request, env: Env): Promise<Response> {
+  // 跨域预检必须先放行，否则浏览器会直接拦掉后续请求
+  if (request.method === 'OPTIONS') return json({ ok: true });
+  if (request.method !== 'POST') return json({ error: 'Method Not Allowed' }, 405);
+
   const body = await readJsonBody(request);
   const wbToken = String(body?.wbToken ?? '').trim();
 
@@ -457,6 +461,9 @@ async function workbuddyExchange(request: Request, env: Env): Promise<Response> 
 
 /** POST /api/auth/workbuddy-bind —— 已用邮箱登录后，把微信与该邮箱绑定。 */
 async function workbuddyBind(request: Request, env: Env): Promise<Response> {
+  if (request.method === 'OPTIONS') return json({ ok: true });
+  if (request.method !== 'POST') return json({ error: 'Method Not Allowed' }, 405);
+
   const sess: any = await resolveSession(request, env);
   if (!sess) {
     return json({ error: 'unauthorized', message: '请先用邮箱验证码登录后再绑定' }, 401);
