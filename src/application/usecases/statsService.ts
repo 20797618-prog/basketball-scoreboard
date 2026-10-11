@@ -342,7 +342,13 @@ export function buildRoundDetails(params: {
     if (round.phase === 'overtime_loser') {
       return `第 ${round.roundNo} 轮 · 最后加时 #${round.overtimeSeq}`;
     }
-    return `第 ${round.roundNo} 轮 · 第一加时 #${round.overtimeSeq}`;
+    if (round.phase === 'overtime_winner') {
+      return `第 ${round.roundNo} 轮 · 第一加时 #${round.overtimeSeq}`;
+    }
+    if (round.phase === 'overtime_duel') {
+      return `第 ${round.roundNo} 轮 · 加时 #${round.overtimeSeq}`;
+    }
+    return `第 ${round.roundNo} 轮`;
   };
 
   return params.stats

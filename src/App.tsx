@@ -4,6 +4,9 @@ import { ColaPage } from './ui/pages/ColaPage';
 import { MatchPage } from './ui/pages/MatchPage';
 import { PeoplePage } from './ui/pages/PeoplePage';
 import { StatsPage } from './ui/pages/StatsPage';
+import { initAutoBackup } from './infrastructure/cloudbase/autoBackup';
+
+initAutoBackup();
 
 export function App() {
   return (

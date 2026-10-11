@@ -465,6 +465,56 @@ body {
   letter-spacing: 1px;
 }
 
+.login-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.login-panel .inline-actions {
+  margin-top: 0;
+}
+
+.login-panel > .text-input,
+.login-panel .inline-actions .text-input {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.login-panel .inline-actions .text-input {
+  flex: 1;
+  width: auto;
+  min-width: 120px;
+}
+
+.auto-backup-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 84px;
+  z-index: 40;
+  max-width: calc(100% - 32px);
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.auto-backup-bar.ok {
+  color: var(--accent);
+}
+
+.auto-backup-bar.err {
+  color: var(--danger);
+}
+
 .daily-grid {
   grid-template-columns: 80px 1fr minmax(70px, auto) minmax(48px, auto);
 }

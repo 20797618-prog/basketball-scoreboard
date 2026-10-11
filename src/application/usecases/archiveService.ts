@@ -43,6 +43,7 @@ const roundSchema = z.object({
     z.literal('regular'),
     z.literal('overtime_loser'),
     z.literal('overtime_winner'),
+    z.literal('overtime_duel'),
   ]),
   overtimeSeq: z.number(),
   parentRoundId: z.string().nullable(),

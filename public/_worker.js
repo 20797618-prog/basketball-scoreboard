@@ -4,7 +4,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (url.pathname.startsWith('/sync/')) {
+    if (url.pathname.startsWith('/sync/') || url.pathname.startsWith('/api/auth/')) {
       const target = new URL(url.pathname + url.search, UPSTREAM_SYNC_API);
       const proxyRequest = new Request(target.toString(), request);
       return fetch(proxyRequest);

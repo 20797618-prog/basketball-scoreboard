@@ -1,7 +1,11 @@
-import { rankRoundByRules, type RankingInput } from './ranking';
+import { rankRoundByRules, type RankingInput, type RankingOutput } from './ranking';
 import type { RankGroup } from './types';
 
-export type SettlementMode = 'regular' | 'overtime_loser' | 'overtime_winner';
+export type SettlementMode =
+  | 'regular'
+  | 'overtime_loser'
+  | 'overtime_winner'
+  | 'overtime_duel';
 
 export interface SettlementRow extends RankingInput {
   hitRate: number;
@@ -17,6 +21,9 @@ export interface SettlementResult {
   needWinnerOvertime: boolean;
   loserAthleteIds: string[];
   winnerAthleteIds: string[];
+  /** 2 人局两人打平时，合并为一场「duel」加时（赢+1/输-1 同轮结算） */
+  needDuelOvertime: boolean;
+  duelAthleteIds: string[];
 }
 
 export function settleRound(
@@ -24,6 +31,11 @@ export function settleRound(
   mode: SettlementMode = 'regular',
 ): SettlementResult {
   const ranked = rankRoundByRules(items);
+
+  if (mode === 'overtime_duel') {
+    return settleDuel(ranked);
+  }
+
   const topRank = ranked[0]?.rank ?? 1;
   const bottomRank = ranked[ranked.length - 1]?.rank ?? 1;
 
@@ -79,11 +91,50 @@ export function settleRound(
   const needWinnerOvertime =
     mode !== 'overtime_loser' && canAward && winnerRows.length > 1;
 
+  // 2 人局且两人命中打平：合并为一场 duel 加时，不再拆成「最后加时 + 第一加时」两次。
+  const isTwoPersonTie =
+    mode === 'regular' && ranked.length === 2 && winnerRows.length === 2;
+
   return {
     rows,
-    needLoserOvertime,
-    needWinnerOvertime,
+    needLoserOvertime: isTwoPersonTie ? false : needLoserOvertime,
+    needWinnerOvertime: isTwoPersonTie ? false : needWinnerOvertime,
     loserAthleteIds: loserRows.map((x) => x.athleteId),
     winnerAthleteIds: winnerRows.map((x) => x.athleteId),
+    needDuelOvertime: isTwoPersonTie,
+    duelAthleteIds: isTwoPersonTie ? winnerRows.map((x) => x.athleteId) : [],
+  };
+}
+
+/**
+ * 2 人合并加时（duel）：每人 1 球。
+ * - 命中数不同：命中多者赢（积分/可乐 +1），另一人输（-1），同轮同时结算；
+ * - 命中数相同：本轮不结算，继续下一球，直到分出胜负。
+ */
+function settleDuel(ranked: RankingOutput[]): SettlementResult {
+  const tied = ranked.length >= 2 && ranked[0].hits === ranked[1].hits;
+
+  const rows: SettlementRow[] = ranked.map((row, index) => {
+    const isWinner = !tied && index === 0;
+    const isLoser = !tied && index === ranked.length - 1;
+    return {
+      ...row,
+      rankGroup: (isWinner ? 'winner' : isLoser ? 'loser' : 'pending') as RankGroup,
+      pointDelta: (isWinner ? 1 : isLoser ? -1 : 0) as -1 | 0 | 1,
+      colaDelta: (isWinner ? 1 : isLoser ? -1 : 0) as -1 | 0 | 1,
+    };
+  });
+
+  const ids = ranked.map((r) => r.athleteId);
+  const lastIdx = ranked.length - 1;
+
+  return {
+    rows,
+    needLoserOvertime: false,
+    needWinnerOvertime: false,
+    loserAthleteIds: tied ? [] : [ranked[lastIdx].athleteId],
+    winnerAthleteIds: tied ? [] : [ranked[0].athleteId],
+    needDuelOvertime: tied,
+    duelAthleteIds: ids,
   };
 }

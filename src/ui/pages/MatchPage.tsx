@@ -20,6 +20,9 @@ import {
   pushToCloud,
   pullFromCloud,
 } from '../../infrastructure/cloudbase/syncService';
+import { withAutoBackupSuppressed } from '../../infrastructure/cloudbase/autoBackup';
+import { useAuth } from '../../infrastructure/auth/useAuth';
+import { LoginPanel } from '../components/LoginPanel';
 import { createId } from '../../shared/createId';
 
 interface ActiveMatchState {
@@ -90,9 +93,8 @@ export function MatchPage() {
   const [error, setError] = useState('');
   const [archiveMessage, setArchiveMessage] = useState('');
   const [syncMessage, setSyncMessage] = useState('');
-  const [currentSyncCode, setCurrentSyncCode] = useState('');
-  const [syncCodeInput, setSyncCodeInput] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
+  const auth = useAuth();
   const [lastSubmission, setLastSubmission] = useState<LastSubmissionState | null>(null);
   const [isStartingMatch, setIsStartingMatch] = useState(false);
   const [showRoundEndModal, setShowRoundEndModal] = useState(false);
@@ -141,6 +143,52 @@ export function MatchPage() {
     setActiveMatch(state);
     prepareRegularSession(state);
   };
+
+  const prevAuthEmailRef = useRef<string | null | undefined>(undefined);
+
+  // 登录 / 切换账号时，自动拉取该账号的云端数据（空账号则保留本机数据）
+  const autoLoadAccount = async (email: string) => {
+    setSyncMessage(`正在加载 ${email} 的云端数据…`);
+    setIsSyncing(true);
+    try {
+      const result = await withAutoBackupSuppressed(() =>
+        pullFromCloud({ allowEmpty: true }),
+      );
+      const total =
+        result.counts.athletes +
+        result.counts.matches +
+        result.counts.matchPlayers +
+        result.counts.rounds +
+        result.counts.roundStats +
+        result.counts.colaLedger;
+      if (total === 0) {
+        setSyncMessage(
+          `已登录 ${email}（该账号暂无云端数据，可点“备份到云端”上传本机数据）。`,
+        );
+      } else {
+        setSyncMessage(`已登录 ${email}，已加载云端数据（共 ${total} 条）。`);
+        setSelectedIds([]);
+        await boot();
+      }
+    } catch (err) {
+      setSyncMessage(`已登录 ${email}，加载云端数据失败：${String(err)}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    const email = auth.email;
+    if (prevAuthEmailRef.current === undefined) {
+      prevAuthEmailRef.current = email;
+      return;
+    }
+    if (email && email !== prevAuthEmailRef.current) {
+      void autoLoadAccount(email);
+    }
+    prevAuthEmailRef.current = email;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.email]);
 
   const prepareRegularSession = (state: ActiveMatchState) => {
     const participants = state.players.map((item) => item.athleteId);
@@ -271,10 +319,14 @@ export function MatchPage() {
   };
 
   const onPushToCloud = async () => {
+    if (!auth.email) {
+      setSyncMessage('请先登录再备份。');
+      return;
+    }
     setSyncMessage('');
     setIsSyncing(true);
     try {
-      const result = await pushToCloud(syncCodeInput);
+      const result = await pushToCloud();
       const total =
         result.counts.athletes +
         result.counts.matches +
@@ -282,11 +334,7 @@ export function MatchPage() {
         result.counts.rounds +
         result.counts.roundStats +
         result.counts.colaLedger;
-      setCurrentSyncCode(result.syncCode);
-      setSyncCodeInput(result.syncCode);
-      setSyncMessage(
-        `已备份到云端（共 ${total} 条）。恢复码：${result.syncCode}（请记住，换设备/清缓存后凭此码恢复）。`,
-      );
+      setSyncMessage(`已备份到云端（共 ${total} 条，账号：${result.email}）。`);
     } catch (err) {
       setSyncMessage(`备份失败：${String(err)}`);
     } finally {
@@ -295,21 +343,20 @@ export function MatchPage() {
   };
 
   const onPullFromCloud = async () => {
-    const code = (syncCodeInput || '').trim().toUpperCase();
-    if (!code) {
-      setSyncMessage('请先输入恢复码（备份时显示的那串 6 位字符）。');
+    if (!auth.email) {
+      setSyncMessage('请先登录再恢复。');
       return;
     }
 
     const ok = window.confirm(
-      '从云端恢复会覆盖当前本地数据，是否继续？',
+      `从云端恢复将覆盖当前本地数据（账号：${auth.email}），是否继续？`,
     );
     if (!ok) return;
 
     setSyncMessage('');
     setIsSyncing(true);
     try {
-      const result = await pullFromCloud(code);
+      const result = await withAutoBackupSuppressed(() => pullFromCloud());
       const total =
         result.counts.athletes +
         result.counts.matches +
@@ -317,7 +364,6 @@ export function MatchPage() {
         result.counts.rounds +
         result.counts.roundStats +
         result.counts.colaLedger;
-      setCurrentSyncCode(code);
       setSyncMessage(`已从云端恢复（共 ${total} 条），正在刷新…`);
       setSelectedIds([]);
       await boot();
@@ -468,26 +514,38 @@ export function MatchPage() {
     let plannedNext: SessionState | null = null;
 
     if (session.mode === 'regular') {
-      const hasLoserTie = settlement.needLoserOvertime;
-      const hasWinnerTie = settlement.needWinnerOvertime;
-      setPendingWinnerIds(hasWinnerTie ? settlement.winnerAthleteIds : []);
+      if (settlement.needDuelOvertime) {
+        // 2 人局两人打平：合并为一场加时（duel），不再拆成「最后加时 + 第一加时」
+        plannedNext = {
+          mode: 'overtime_duel',
+          participants: settlement.duelAthleteIds,
+          roundNo: session.roundNo,
+          parentRoundId: round.id,
+          overtimeSeq: 1,
+        };
+        setPendingWinnerIds([]);
+      } else {
+        const hasLoserTie = settlement.needLoserOvertime;
+        const hasWinnerTie = settlement.needWinnerOvertime;
+        setPendingWinnerIds(hasWinnerTie ? settlement.winnerAthleteIds : []);
 
-      if (hasLoserTie) {
-        plannedNext = {
-          mode: 'overtime_loser',
-          participants: settlement.loserAthleteIds,
-          roundNo: session.roundNo,
-          parentRoundId: round.id,
-          overtimeSeq: 1,
-        };
-      } else if (hasWinnerTie) {
-        plannedNext = {
-          mode: 'overtime_winner',
-          participants: settlement.winnerAthleteIds,
-          roundNo: session.roundNo,
-          parentRoundId: round.id,
-          overtimeSeq: 1,
-        };
+        if (hasLoserTie) {
+          plannedNext = {
+            mode: 'overtime_loser',
+            participants: settlement.loserAthleteIds,
+            roundNo: session.roundNo,
+            parentRoundId: round.id,
+            overtimeSeq: 1,
+          };
+        } else if (hasWinnerTie) {
+          plannedNext = {
+            mode: 'overtime_winner',
+            participants: settlement.winnerAthleteIds,
+            roundNo: session.roundNo,
+            parentRoundId: round.id,
+            overtimeSeq: 1,
+          };
+        }
       }
     } else if (session.mode === 'overtime_loser') {
       if (settlement.needLoserOvertime) {
@@ -508,12 +566,26 @@ export function MatchPage() {
       } else {
         setPendingWinnerIds([]);
       }
-    } else if (settlement.needWinnerOvertime) {
-      plannedNext = {
-        ...session,
-        participants: settlement.winnerAthleteIds,
-        overtimeSeq: session.overtimeSeq + 1,
-      };
+    } else if (session.mode === 'overtime_duel') {
+      if (settlement.needDuelOvertime) {
+        plannedNext = {
+          ...session,
+          participants: settlement.duelAthleteIds,
+          overtimeSeq: session.overtimeSeq + 1,
+        };
+      } else {
+        setPendingWinnerIds([]);
+      }
+    } else if (session.mode === 'overtime_winner') {
+      if (settlement.needWinnerOvertime) {
+        plannedNext = {
+          ...session,
+          participants: settlement.winnerAthleteIds,
+          overtimeSeq: session.overtimeSeq + 1,
+        };
+      } else {
+        setPendingWinnerIds([]);
+      }
     } else {
       setPendingWinnerIds([]);
     }
@@ -525,6 +597,8 @@ export function MatchPage() {
         setResultHint('先进行最后加时。');
       } else if (plannedNext.mode === 'overtime_winner') {
         setResultHint('进入第一加时。');
+      } else if (plannedNext.mode === 'overtime_duel') {
+        setResultHint('平局，进入加时。');
       }
     } else {
       setResultHint('本轮已完成，可开始下轮。');
@@ -536,25 +610,45 @@ export function MatchPage() {
   const openRoundEndSummary = async () => {
     if (!activeMatch) return;
 
-    const stats = await roundRepo.getRoundStatsByMatch(activeMatch.match.id);
-    const byAthlete = new Map<string, { rounds: number; points: number; cola: number }>();
+    const [rounds, stats] = await Promise.all([
+      roundRepo.getRoundsByMatch(activeMatch.match.id),
+      roundRepo.getRoundStatsByMatch(activeMatch.match.id),
+    ]);
+
+    const roundNoByRoundId = new Map<string, number>();
+    rounds.forEach((row) => {
+      roundNoByRoundId.set(row.id, row.roundNo);
+    });
+
+    // 按 roundNo 去重：常规赛和加时属于同一轮，按 1 轮算。
+    const byAthlete = new Map<
+      string,
+      { roundNos: Set<number>; points: number; cola: number }
+    >();
 
     stats.forEach((row) => {
-      const prev = byAthlete.get(row.athleteId) ?? { rounds: 0, points: 0, cola: 0 };
-      prev.rounds += 1;
+      const roundNo = roundNoByRoundId.get(row.roundId);
+      const prev = byAthlete.get(row.athleteId) ?? {
+        roundNos: new Set<number>(),
+        points: 0,
+        cola: 0,
+      };
+      if (typeof roundNo === 'number') {
+        prev.roundNos.add(roundNo);
+      }
       prev.points += row.pointDelta;
       prev.cola += row.colaDelta;
       byAthlete.set(row.athleteId, prev);
     });
 
     const rows = activeMatch.players.map((item) => {
-      const score = byAthlete.get(item.athleteId) ?? { rounds: 0, points: 0, cola: 0 };
+      const score = byAthlete.get(item.athleteId);
       return {
         athleteId: item.athleteId,
         name: athleteMap.get(item.athleteId)?.name ?? item.athleteId,
-        rounds: score.rounds,
-        points: score.points,
-        cola: score.cola,
+        rounds: score?.roundNos.size ?? 0,
+        points: score?.points ?? 0,
+        cola: score?.cola ?? 0,
       };
     });
 
@@ -591,7 +685,8 @@ export function MatchPage() {
     setRoundEndRows([]);
     setShowMatchEndModal(false);
     setMatchEndRows([]);
-    setStage('setup');
+    // 加时直接进入命中录入，跳过「确认每人投 1 球」的 setup 屏（框架保留，便于以后改规则）
+    setStage(nextSession.mode === 'regular' ? 'setup' : 'input');
   };
 
   const rollbackLastSubmission = async () => {
@@ -650,19 +745,7 @@ export function MatchPage() {
           </div>
           {archiveMessage ? <p className="subtitle">{archiveMessage}</p> : null}
           {syncMessage ? <p className="subtitle">{syncMessage}</p> : null}
-          <div className="sync-code-row">
-            <input
-              className="text-input"
-              type="text"
-              placeholder="恢复码（如 123456，备份/恢复共用）"
-              value={syncCodeInput}
-              onChange={(e) => setSyncCodeInput(e.target.value.toUpperCase())}
-              maxLength={12}
-            />
-            {currentSyncCode ? (
-              <span className="sync-code-hint">当前恢复码：{currentSyncCode}</span>
-            ) : null}
-          </div>
+          <LoginPanel auth={auth} />
         </section>
 
         <section className="card">
@@ -707,7 +790,9 @@ export function MatchPage() {
       ? `第 ${session.roundNo} 轮`
       : session.mode === 'overtime_loser'
         ? `第 ${session.roundNo} 轮 · 最后加时 #${session.overtimeSeq}`
-        : `第 ${session.roundNo} 轮 · 第一加时 #${session.overtimeSeq}`
+        : session.mode === 'overtime_winner'
+          ? `第 ${session.roundNo} 轮 · 第一加时 #${session.overtimeSeq}`
+          : `第 ${session.roundNo} 轮 · 加时 #${session.overtimeSeq}`
     : '';
 
   return (
@@ -749,19 +834,7 @@ export function MatchPage() {
         </div>
         {archiveMessage ? <p className="subtitle">{archiveMessage}</p> : null}
         {syncMessage ? <p className="subtitle">{syncMessage}</p> : null}
-        <div className="sync-code-row">
-          <input
-            className="text-input"
-            type="text"
-            placeholder="恢复码（如 123456，备份/恢复共用）"
-            value={syncCodeInput}
-            onChange={(e) => setSyncCodeInput(e.target.value.toUpperCase())}
-            maxLength={12}
-          />
-          {currentSyncCode ? (
-            <span className="sync-code-hint">当前恢复码：{currentSyncCode}</span>
-          ) : null}
-        </div>
+        <LoginPanel auth={auth} />
         <button className="button button-ghost" type="button" onClick={() => void openMatchEndSummary()}>
           结束本局
         </button>

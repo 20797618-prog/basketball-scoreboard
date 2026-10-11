@@ -6,3 +6,8 @@ compatibility_date = "2026-09-05"
 binding = "SYNC_DB"
 database_name = "basketball-sync-db"
 database_id = "e79aa228-ff25-4edc-8fc8-cf0e38516962"
+
+# 中央账号库（与「简约网站导航」等应用共用同一份账号数据）
+[[kv_namespaces]]
+binding = "ACCOUNTS_KV"
+id = "e8d41d4739e94a80b3f566fc0d549e96"

@@ -1,9 +1,24 @@
+// @ts-ignore - account 体系为纯 JS，无类型声明
+import * as authRequestCode from '../account/api/auth/request-code.js';
+// @ts-ignore
+import * as authVerifyCode from '../account/api/auth/verify-code.js';
+// @ts-ignore
+import * as authLoginPassword from '../account/api/auth/login-password.js';
+// @ts-ignore
+import * as authSetPassword from '../account/api/auth/set-password.js';
+// @ts-ignore
+import * as authMe from '../account/api/auth/me.js';
+// @ts-ignore
+import { resolveSession } from '../account/_account_lib.js';
+
 export interface Env {
   SYNC_DB: D1Database;
+  ACCOUNTS_KV: KVNamespace;
 }
 
 type D1Database = any;
 type D1PreparedStatement = any;
+type KVNamespace = any;
 
 type RowRecord = Record<string, unknown>;
 
@@ -17,11 +32,6 @@ const json = (data: unknown, status = 200): Response =>
       'access-control-allow-headers': 'content-type',
     },
   });
-
-const normalizeCode = (value: unknown): string =>
-  String(value ?? '')
-    .trim()
-    .toUpperCase();
 
 const asBoolInt = (value: unknown): number => (value ? 1 : 0);
 
@@ -275,11 +285,32 @@ const mapColaLedger = (r: any) => ({
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // 账号认证路由（/api/auth/*），含 OPTIONS，交给 account 体系处理
+    if (url.pathname.startsWith('/api/auth/')) {
+      const route = url.pathname.slice('/api/auth/'.length);
+      const handler =
+        route === 'request-code'
+          ? authRequestCode
+          : route === 'verify-code'
+            ? authVerifyCode
+            : route === 'login-password'
+              ? authLoginPassword
+              : route === 'set-password'
+                ? authSetPassword
+                : route === 'me'
+                  ? authMe
+                  : null;
+      if (handler) {
+        return handler.onRequest({ request, env });
+      }
+      return json({ error: 'Not Found' }, 404);
+    }
+
     if (request.method === 'OPTIONS') {
       return json({ ok: true });
     }
-
-    const url = new URL(request.url);
 
     if (request.method === 'GET' && url.pathname === '/health') {
       return json({ ok: true, service: 'scoreboard-sync-worker' });
@@ -297,10 +328,11 @@ export default {
     }
 
     if (url.pathname === '/sync/push') {
-      const syncCode = normalizeCode(payload?.syncCode);
-      if (!syncCode) {
-        return json({ error: 'syncCode 不能为空' }, 400);
+      const sess = await resolveSession(request, env);
+      if (!sess) {
+        return json({ error: '未登录，请先登录' }, 401);
       }
+      const syncCode = sess.email;
 
       const data = payload?.data ?? {};
       const athletes = Array.isArray(data.athletes) ? data.athletes : [];
@@ -335,10 +367,11 @@ export default {
     }
 
     if (url.pathname === '/sync/pull') {
-      const syncCode = normalizeCode(payload?.syncCode);
-      if (!syncCode) {
-        return json({ error: 'syncCode 不能为空' }, 400);
+      const sess = await resolveSession(request, env);
+      if (!sess) {
+        return json({ error: '未登录，请先登录' }, 401);
       }
+      const syncCode = sess.email;
 
       try {
         const [athletes, matches, matchPlayers, rounds, roundStats, colaLedger] = await Promise.all([

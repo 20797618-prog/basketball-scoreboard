@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "deploy:api": "cd cloudflare-sync-worker && npx --yes wrangler deploy",
+    "deploy:web": "npm run build && npx --yes wrangler pages deploy dist --project-name basketball",
+    "deploy": "npm run deploy:api && npm run deploy:web"
   },
   "dependencies": {
     "@cloudbase/js-sdk": "^3.8.2",

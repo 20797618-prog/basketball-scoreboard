@@ -1,6 +1,10 @@
 export type EntityId = string;
 
-export type RoundPhase = 'regular' | 'overtime_loser' | 'overtime_winner';
+export type RoundPhase =
+  | 'regular'
+  | 'overtime_loser'
+  | 'overtime_winner'
+  | 'overtime_duel';
 
 export interface Athlete {
   id: EntityId;

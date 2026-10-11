@@ -17,6 +17,7 @@ export function previewRoundSettlement(
 export function toRoundPhase(mode: SettlementMode): RoundPhase {
   if (mode === 'overtime_loser') return 'overtime_loser';
   if (mode === 'overtime_winner') return 'overtime_winner';
+  if (mode === 'overtime_duel') return 'overtime_duel';
   return 'regular';
 }
 

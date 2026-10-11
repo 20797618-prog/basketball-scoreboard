@@ -1,15 +1,16 @@
-import { SYNC_API_BASE, getOrCreateSyncCode, setSyncCode } from './client';
+import { SYNC_API_BASE } from './client';
+import { getToken, getCurrentEmail } from '../auth/authService';
 import { appDb } from '../db/appDb';
 import type { Athlete, ColaLedgerEntry, Match, MatchPlayer, Round, RoundStat } from '../../domain/types';
 import type { Table } from 'dexie';
 
-/** 同步服务：通过 Cloudflare Worker + D1 完成备份与恢复。 */
+/** 同步服务：通过 Cloudflare Worker + D1 完成备份与恢复。数据按登录邮箱隔离。 */
 
 export type SyncDirection = 'push' | 'pull';
 
 export interface SyncResult {
   direction: SyncDirection;
-  syncCode: string;
+  email: string;
   counts: {
     athletes: number;
     matches: number;
@@ -42,38 +43,44 @@ async function replaceLocalTable<T>(table: Table<T, string>, rows: T[]): Promise
   }
 }
 
-async function parseError(response: Response): Promise<never> {
-  let message = `请求失败（HTTP ${response.status}）`;
-  try {
-    const payload = (await response.json()) as { error?: string };
-    if (payload?.error) message = payload.error;
-  } catch {
-    // ignore
-  }
-  throw new Error(message);
-}
-
 async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const token = getToken();
+  if (!token) {
+    throw new Error('请先登录');
+  }
+
   const response = await fetch(`${SYNC_API_BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ' + token,
+    },
     body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    await parseError(response);
+
+  if (response.status === 401) {
+    throw new Error('登录已过期，请重新登录');
   }
+
+  if (!response.ok) {
+    let message = `请求失败（HTTP ${response.status}）`;
+    try {
+      const payload = (await response.json()) as { error?: string };
+      if (payload?.error) message = payload.error;
+    } catch {
+      // ignore
+    }
+    throw new Error(message);
+  }
+
   return (await response.json()) as T;
 }
 
 // ============ 备份到云端 ============
 
-export async function pushToCloud(customCode?: string): Promise<SyncResult> {
+export async function pushToCloud(): Promise<SyncResult> {
   const startedAt = Date.now();
-  const normalized = (customCode ?? '').trim().toUpperCase();
-  const syncCode = normalized || getOrCreateSyncCode();
-  if (normalized) {
-    setSyncCode(normalized);
-  }
+  const email = getCurrentEmail() ?? '';
 
   const [
     athletes,
@@ -92,7 +99,6 @@ export async function pushToCloud(customCode?: string): Promise<SyncResult> {
   ]);
 
   await postJson('/sync/push', {
-    syncCode,
     data: {
       athletes,
       matches,
@@ -105,7 +111,7 @@ export async function pushToCloud(customCode?: string): Promise<SyncResult> {
 
   return {
     direction: 'push',
-    syncCode,
+    email,
     counts: {
       athletes: athletes.length,
       matches: matches.length,
@@ -121,14 +127,11 @@ export async function pushToCloud(customCode?: string): Promise<SyncResult> {
 
 // ============ 从云端恢复 ============
 
-export async function pullFromCloud(syncCode: string): Promise<SyncResult> {
+export async function pullFromCloud(options?: { allowEmpty?: boolean }): Promise<SyncResult> {
   const startedAt = Date.now();
-  const code = syncCode.trim().toUpperCase();
-  if (!code) {
-    throw new Error('请输入恢复码');
-  }
+  const email = getCurrentEmail() ?? '';
 
-  const response = await postJson<PullResponse>('/sync/pull', { syncCode: code });
+  const response = await postJson<PullResponse>('/sync/pull', {});
   const {
     athletes,
     matches,
@@ -138,7 +141,7 @@ export async function pullFromCloud(syncCode: string): Promise<SyncResult> {
     colaLedger,
   } = response.data;
 
-  // 检查是否真的拉到了数据（避免用户输入错误恢复码后本地被清空）
+  // 检查是否真的拉到了数据（避免账号下无数据时本地被清空）
   const totalFetched =
     athletes.length +
     matches.length +
@@ -147,7 +150,23 @@ export async function pullFromCloud(syncCode: string): Promise<SyncResult> {
     roundStats.length +
     colaLedger.length;
   if (totalFetched === 0) {
-    throw new Error('未找到该恢复码对应的数据，请检查恢复码是否正确');
+    if (options?.allowEmpty) {
+      return {
+        direction: 'pull',
+        email,
+        counts: {
+          athletes: 0,
+          matches: 0,
+          matchPlayers: 0,
+          rounds: 0,
+          roundStats: 0,
+          colaLedger: 0,
+        },
+        startedAt,
+        finishedAt: Date.now(),
+      };
+    }
+    throw new Error('该账号下没有云端数据，请先备份');
   }
 
   await appDb.transaction(
@@ -172,7 +191,7 @@ export async function pullFromCloud(syncCode: string): Promise<SyncResult> {
 
   return {
     direction: 'pull',
-    syncCode: code,
+    email,
     counts: {
       athletes: athletes.length,
       matches: matches.length,

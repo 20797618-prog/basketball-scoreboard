@@ -1,0 +1,46 @@
+name: Deploy to Cloudflare
+
+# 推送到 main 即自动部署「数据后端 Worker」+「前端 Pages」。
+# 需要在本仓库 Settings → Secrets and variables → Actions 里配置：
+#   CLOUDFLARE_API_TOKEN  - Cloudflare API 令牌（需 Workers Scripts:Edit + Pages:Edit 权限）
+#   CLOUDFLARE_ACCOUNT_ID - Cloudflare 账户 ID
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudflare-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Deploy sync + auth Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare-sync-worker
+          command: deploy
+
+      - name: Deploy frontend to Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name basketball
