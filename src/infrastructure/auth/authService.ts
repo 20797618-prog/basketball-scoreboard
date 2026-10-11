@@ -1,7 +1,10 @@
 /**
- * 账号认证服务：封装 /api/auth/* 接口（由 Pages 代理转发到 Worker）。
+ * 账号认证服务：封装 /api/auth/* 接口。
+ * - Cloudflare Pages：同域相对路径，由 Pages 代理转发到 Worker。
+ * - WorkBuddy 托管：没有同域代理，API_BASE 会自动切换为 Worker 绝对地址。
  * 会话 token 存于 localStorage，30 天有效。
  */
+import { API_BASE } from '../platform/hosting';
 
 const TOKEN_KEY = 'scoreboard_auth_token';
 const EMAIL_KEY = 'scoreboard_auth_email';
@@ -70,7 +73,7 @@ async function api<T>(
   if (token) headers['Authorization'] = 'Bearer ' + token;
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(path, {
+  const res = await fetch(API_BASE + path, {
     method: options.method ?? 'GET',
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
