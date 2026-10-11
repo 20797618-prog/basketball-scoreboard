@@ -6,3 +6,4 @@ dist.zip
 .vscode
 .DS_Store
 *.local
+vite.config.js.timestamp-*
