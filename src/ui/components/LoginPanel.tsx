@@ -18,6 +18,19 @@ export function LoginPanel({ auth }: { auth: AuthState }) {
 
   return (
     <div className="login-panel">
+      {auth.wechatAvailable ? (
+        <>
+          <button
+            className="button button-wechat"
+            type="button"
+            onClick={() => void auth.wechatLogin()}
+            disabled={auth.busy}
+          >
+            微信登录
+          </button>
+          <p className="subtitle login-divider">或使用邮箱验证码登录</p>
+        </>
+      ) : null}
       <input
         className="text-input"
         type="email"
@@ -51,6 +64,16 @@ export function LoginPanel({ auth }: { auth: AuthState }) {
       >
         登录
       </button>
+      {auth.wechatPendingBind && auth.email ? (
+        <button
+          className="button button-small button-ghost"
+          type="button"
+          onClick={() => void auth.bindWechat()}
+          disabled={auth.busy}
+        >
+          绑定当前微信
+        </button>
+      ) : null}
       {auth.msg ? <p className="subtitle">{auth.msg}</p> : null}
     </div>
   );

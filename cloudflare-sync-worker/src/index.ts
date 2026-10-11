@@ -9,11 +9,15 @@ import * as authSetPassword from '../account/api/auth/set-password.js';
 // @ts-ignore
 import * as authMe from '../account/api/auth/me.js';
 // @ts-ignore
-import { resolveSession } from '../account/_account_lib.js';
+import { resolveSession, normEmail, randomHex, SESSION_TTL } from '../account/_account_lib.js';
 
 export interface Env {
   SYNC_DB: D1Database;
   ACCOUNTS_KV: KVNamespace;
+  /** WorkBuddy 应用的数据面地址（用于校验微信身份） */
+  WB_AUTH_ENDPOINT?: string;
+  /** WorkBuddy 应用的 publishableKey（客户端凭据，非密钥） */
+  WB_PUBLISHABLE_KEY?: string;
 }
 
 type D1Database = any;
@@ -29,7 +33,8 @@ const json = (data: unknown, status = 200): Response =>
       'content-type': 'application/json; charset=utf-8',
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET,POST,OPTIONS',
-      'access-control-allow-headers': 'content-type',
+      // 跨域时必须允许 authorization，否则从 WorkBuddy 托管域名发起的请求会在预检阶段被浏览器拦掉
+      'access-control-allow-headers': 'content-type, authorization',
     },
   });
 
@@ -367,6 +372,132 @@ const mapColaTransfer = (r: any) => ({
   decidedAt: r.decided_at == null ? null : Number(r.decided_at),
 });
 
+// ============ WorkBuddy（微信登录）身份桥 ============
+//
+// 安全底线：绝不信任前端传来的 uid。
+// Worker 拿前端递来的用户令牌，自己去调用 WorkBuddy 的身份校验接口确认身份，
+// 校验通过后才把 uid 与邮箱账号关联（首次绑定一次），并签发我们自己的会话 token。
+
+interface WbVerifyResult {
+  uid?: string;
+  error?: string;
+}
+
+async function verifyWorkBuddyToken(env: Env, wbToken: string): Promise<WbVerifyResult> {
+  if (!env.WB_AUTH_ENDPOINT || !env.WB_PUBLISHABLE_KEY) {
+    return { error: '服务端尚未配置 WorkBuddy 校验参数（WB_AUTH_ENDPOINT / WB_PUBLISHABLE_KEY）' };
+  }
+  if (!wbToken) return { error: '缺少 WorkBuddy 令牌' };
+
+  try {
+    const res = await fetch(`${env.WB_AUTH_ENDPOINT}/.cloud/auth/v1/user/me`, {
+      headers: {
+        'x-wb-webapp-access-key': env.WB_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${wbToken}`,
+      },
+    });
+    if (!res.ok) {
+      return { error: `WorkBuddy 身份校验失败（HTTP ${res.status}）` };
+    }
+    const data: any = await res.json();
+    const uid = data?.user?.id ?? data?.id ?? data?.user_id ?? '';
+    if (!uid) return { error: '身份校验响应中缺少 uid' };
+    return { uid: String(uid) };
+  } catch (err) {
+    return { error: `WorkBuddy 身份校验异常：${String(err)}` };
+  }
+}
+
+/** 按现有账号体系签发会话（与 verify-code 完全一致的机制）。 */
+async function issueSession(env: Env, email: string): Promise<string> {
+  const token = randomHex(32);
+  const exp = Date.now() + SESSION_TTL * 1000;
+  await env.ACCOUNTS_KV.put('session:' + token, JSON.stringify({ email, exp }), {
+    expirationTtl: SESSION_TTL,
+  });
+  return token;
+}
+
+async function readJsonBody(request: Request): Promise<any> {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+}
+
+/** POST /api/auth/workbuddy-exchange —— 用微信登录令牌换取本站会话。 */
+async function workbuddyExchange(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonBody(request);
+  const wbToken = String(body?.wbToken ?? '').trim();
+
+  const verified = await verifyWorkBuddyToken(env, wbToken);
+  if (verified.error) {
+    return json({ error: 'wb_verify_failed', message: verified.error }, 401);
+  }
+
+  const row: any = await env.SYNC_DB
+    .prepare('SELECT email FROM wb_bindings WHERE wb_uid = ?1')
+    .bind(verified.uid)
+    .first();
+
+  if (!row?.email) {
+    return json(
+      {
+        error: 'need_bind',
+        message: '该微信尚未绑定账号，请先用邮箱验证码登录完成一次绑定。',
+      },
+      409,
+    );
+  }
+
+  const token = await issueSession(env, row.email);
+  return json({ ok: true, token, email: row.email, wbUid: verified.uid });
+}
+
+/** POST /api/auth/workbuddy-bind —— 已用邮箱登录后，把微信与该邮箱绑定。 */
+async function workbuddyBind(request: Request, env: Env): Promise<Response> {
+  const sess: any = await resolveSession(request, env);
+  if (!sess) {
+    return json({ error: 'unauthorized', message: '请先用邮箱验证码登录后再绑定' }, 401);
+  }
+
+  const body = await readJsonBody(request);
+  const wbToken = String(body?.wbToken ?? '').trim();
+
+  const verified = await verifyWorkBuddyToken(env, wbToken);
+  if (verified.error) {
+    return json({ error: 'wb_verify_failed', message: verified.error }, 401);
+  }
+
+  const email = normEmail(sess.email);
+  const existing: any = await env.SYNC_DB
+    .prepare('SELECT email FROM wb_bindings WHERE wb_uid = ?1')
+    .bind(verified.uid)
+    .first();
+
+  if (existing?.email && normEmail(existing.email) !== email) {
+    return json(
+      { error: 'already_bound', message: '该微信已绑定其他账号，请先用原账号解绑。' },
+      409,
+    );
+  }
+
+  const now = Date.now();
+  await env.SYNC_DB
+    .prepare(
+      `INSERT INTO wb_bindings (wb_uid, email, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(wb_uid) DO UPDATE SET
+         email = excluded.email,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(verified.uid, email, now, now)
+    .run();
+
+  return json({ ok: true, email, wbUid: verified.uid });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -374,6 +505,12 @@ export default {
     // 账号认证路由（/api/auth/*），含 OPTIONS，交给 account 体系处理
     if (url.pathname.startsWith('/api/auth/')) {
       const route = url.pathname.slice('/api/auth/'.length);
+      if (route === 'workbuddy-exchange') {
+        return workbuddyExchange(request, env);
+      }
+      if (route === 'workbuddy-bind') {
+        return workbuddyBind(request, env);
+      }
       const handler =
         route === 'request-code'
           ? authRequestCode

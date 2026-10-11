@@ -256,6 +256,18 @@ body {
   border-top: 1px dashed var(--border);
 }
 
+.button-wechat {
+  width: 100%;
+  background: #07c160;
+  border-color: #07c160;
+  color: #fff;
+}
+
+.login-divider {
+  text-align: center;
+  margin: 2px 0 6px;
+}
+
 .claim-code {
   letter-spacing: 2px;
   color: var(--accent);

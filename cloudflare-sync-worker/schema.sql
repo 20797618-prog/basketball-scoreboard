@@ -98,11 +98,22 @@ CREATE TABLE IF NOT EXISTS cola_transfers (
   PRIMARY KEY (sync_code, id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_athletes_sync_code ON athletes(sync_code);
-CREATE INDEX IF NOT EXISTS idx_matches_sync_code ON matches(sync_code);
+CREATE INDEX IF NOT EXISTS idx_athletes_sync_code ON athletes(sync_code);CREATE INDEX IF NOT EXISTS idx_matches_sync_code ON matches(sync_code);
 CREATE INDEX IF NOT EXISTS idx_match_players_sync_code ON match_players(sync_code);
 CREATE INDEX IF NOT EXISTS idx_rounds_sync_code ON rounds(sync_code);
 CREATE INDEX IF NOT EXISTS idx_round_stats_sync_code ON round_stats(sync_code);
 CREATE INDEX IF NOT EXISTS idx_cola_ledger_sync_code ON cola_ledger(sync_code);
 CREATE INDEX IF NOT EXISTS idx_athlete_claims_sync_code ON athlete_claims(sync_code);
 CREATE INDEX IF NOT EXISTS idx_cola_transfers_sync_code ON cola_transfers(sync_code);
+
+-- 微信身份桥：WorkBuddy 的 uid ↔ 本站邮箱账号（首次绑定一次，之后微信扫码直接进）
+-- 注意：wb_uid 全局唯一，因此不带 sync_code 前缀。
+CREATE TABLE IF NOT EXISTS wb_bindings (
+  wb_uid TEXT NOT NULL,
+  email TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (wb_uid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wb_bindings_email ON wb_bindings(email);

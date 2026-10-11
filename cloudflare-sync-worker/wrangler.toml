@@ -11,3 +11,8 @@ database_id = "e79aa228-ff25-4edc-8fc8-cf0e38516962"
 [[kv_namespaces]]
 binding = "ACCOUNTS_KV"
 id = "e8d41d4739e94a80b3f566fc0d549e96"
+
+# WorkBuddy 应用信息：用于校验微信登录身份（两个值都是公开信息，非密钥）
+[vars]
+WB_AUTH_ENDPOINT = "https://basketball-scoreboard.app.workbuddy.host"
+WB_PUBLISHABLE_KEY = "wbpk_FhMyL3yOJBCHaIZzTiTiSR_mfFS1PqYGuoe9yJpOSwLTBQfRrRiODkL"

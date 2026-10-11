@@ -138,3 +138,52 @@ export async function setPassword(password: string): Promise<void> {
 export async function me(): Promise<{ user: AuthUser }> {
   return api('/api/auth/me');
 }
+
+// ============ 微信登录身份桥 ============
+
+/** 把 WorkBuddy 的微信令牌交给 Worker 换取本站会话。 */
+export async function exchangeWorkBuddyToken(
+  wbToken: string,
+): Promise<
+  | { ok: true; token: string; email: string }
+  | { ok: false; needBind: true; message: string }
+> {
+  let res: Response;
+  try {
+    res = await fetch(API_BASE + '/api/auth/workbuddy-exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wbToken }),
+    });
+  } catch (err) {
+    return { ok: false, needBind: true, message: `网络异常：${String(err)}` };
+  }
+
+  const data: any = await (async () => {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
+  })();
+
+  if (res.status === 409) {
+    return { ok: false, needBind: true, message: data?.message ?? '该微信尚未绑定账号。' };
+  }
+  if (!res.ok) {
+    throw new Error(data?.message || `微信登录失败（HTTP ${res.status}）`);
+  }
+
+  setToken(data.token);
+  setEmail(data.email);
+  return { ok: true, token: data.token, email: data.email };
+}
+
+/** 已用邮箱登录后，把当前微信与该邮箱绑定（只需一次）。 */
+export async function bindWorkBuddyToken(wbToken: string): Promise<void> {
+  const data = await api<any>('/api/auth/workbuddy-bind', {
+    method: 'POST',
+    body: { wbToken },
+  });
+  if (data?.email) setEmail(data.email);
+}
