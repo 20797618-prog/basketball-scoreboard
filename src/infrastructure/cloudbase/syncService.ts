@@ -1,7 +1,16 @@
 import { SYNC_API_BASE } from './client';
 import { getToken, getCurrentEmail } from '../auth/authService';
 import { appDb } from '../db/appDb';
-import type { Athlete, ColaLedgerEntry, Match, MatchPlayer, Round, RoundStat } from '../../domain/types';
+import type {
+  Athlete,
+  AthleteClaim,
+  ColaLedgerEntry,
+  ColaTransfer,
+  Match,
+  MatchPlayer,
+  Round,
+  RoundStat,
+} from '../../domain/types';
 import type { Table } from 'dexie';
 
 /** 同步服务：通过 Cloudflare Worker + D1 完成备份与恢复。数据按登录邮箱隔离。 */
@@ -18,6 +27,8 @@ export interface SyncResult {
     rounds: number;
     roundStats: number;
     colaLedger: number;
+    athleteClaims: number;
+    colaTransfers: number;
   };
   startedAt: number;
   finishedAt: number;
@@ -30,6 +41,8 @@ interface SyncPayload {
   rounds: Round[];
   roundStats: RoundStat[];
   colaLedger: ColaLedgerEntry[];
+  athleteClaims: AthleteClaim[];
+  colaTransfers: ColaTransfer[];
 }
 
 interface PullResponse {
@@ -89,6 +102,8 @@ export async function pushToCloud(): Promise<SyncResult> {
     rounds,
     roundStats,
     colaLedger,
+    athleteClaims,
+    colaTransfers,
   ] = await Promise.all([
     appDb.athletes.toArray(),
     appDb.matches.toArray(),
@@ -96,6 +111,8 @@ export async function pushToCloud(): Promise<SyncResult> {
     appDb.rounds.toArray(),
     appDb.roundStats.toArray(),
     appDb.colaLedger.toArray(),
+    appDb.athleteClaims.toArray(),
+    appDb.colaTransfers.toArray(),
   ]);
 
   await postJson('/sync/push', {
@@ -106,6 +123,8 @@ export async function pushToCloud(): Promise<SyncResult> {
       rounds,
       roundStats,
       colaLedger,
+      athleteClaims,
+      colaTransfers,
     } satisfies SyncPayload,
   });
 
@@ -119,6 +138,8 @@ export async function pushToCloud(): Promise<SyncResult> {
       rounds: rounds.length,
       roundStats: roundStats.length,
       colaLedger: colaLedger.length,
+      athleteClaims: athleteClaims.length,
+      colaTransfers: colaTransfers.length,
     },
     startedAt,
     finishedAt: Date.now(),
@@ -139,6 +160,8 @@ export async function pullFromCloud(options?: { allowEmpty?: boolean }): Promise
     rounds,
     roundStats,
     colaLedger,
+    athleteClaims,
+    colaTransfers,
   } = response.data;
 
   // 检查是否真的拉到了数据（避免账号下无数据时本地被清空）
@@ -148,7 +171,9 @@ export async function pullFromCloud(options?: { allowEmpty?: boolean }): Promise
     matchPlayers.length +
     rounds.length +
     roundStats.length +
-    colaLedger.length;
+    colaLedger.length +
+    athleteClaims.length +
+    colaTransfers.length;
   if (totalFetched === 0) {
     if (options?.allowEmpty) {
       return {
@@ -161,6 +186,8 @@ export async function pullFromCloud(options?: { allowEmpty?: boolean }): Promise
           rounds: 0,
           roundStats: 0,
           colaLedger: 0,
+          athleteClaims: 0,
+          colaTransfers: 0,
         },
         startedAt,
         finishedAt: Date.now(),
@@ -178,6 +205,8 @@ export async function pullFromCloud(options?: { allowEmpty?: boolean }): Promise
       appDb.rounds,
       appDb.roundStats,
       appDb.colaLedger,
+      appDb.athleteClaims,
+      appDb.colaTransfers,
     ],
     async () => {
       await replaceLocalTable(appDb.athletes, athletes);
@@ -186,6 +215,8 @@ export async function pullFromCloud(options?: { allowEmpty?: boolean }): Promise
       await replaceLocalTable(appDb.rounds, rounds);
       await replaceLocalTable(appDb.roundStats, roundStats);
       await replaceLocalTable(appDb.colaLedger, colaLedger);
+      await replaceLocalTable(appDb.athleteClaims, athleteClaims);
+      await replaceLocalTable(appDb.colaTransfers, colaTransfers);
     },
   );
 
@@ -199,6 +230,8 @@ export async function pullFromCloud(options?: { allowEmpty?: boolean }): Promise
       rounds: rounds.length,
       roundStats: roundStats.length,
       colaLedger: colaLedger.length,
+      athleteClaims: athleteClaims.length,
+      colaTransfers: colaTransfers.length,
     },
     startedAt,
     finishedAt: Date.now(),

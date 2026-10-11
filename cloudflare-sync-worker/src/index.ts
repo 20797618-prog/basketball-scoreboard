@@ -283,6 +283,90 @@ const mapColaLedger = (r: any) => ({
   operator: r.operator,
 });
 
+async function upsertAthleteClaims(db: D1Database, syncCode: string, rows: RowRecord[]): Promise<void> {
+  const stmt = db.prepare(
+    `INSERT INTO athlete_claims (sync_code, athlete_id, claim_code, claimed_by, claimed_at, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+     ON CONFLICT(sync_code, athlete_id) DO UPDATE SET
+       claim_code = excluded.claim_code,
+       claimed_by = excluded.claimed_by,
+       claimed_at = excluded.claimed_at,
+       created_at = excluded.created_at,
+       updated_at = excluded.updated_at`,
+  );
+  await runBatches(
+    db,
+    rows.map((r) =>
+      stmt.bind(
+        syncCode,
+        String(r.athleteId ?? ''),
+        String(r.claimCode ?? ''),
+        r.claimedBy == null ? null : String(r.claimedBy),
+        r.claimedAt == null ? null : Number(r.claimedAt),
+        Number(r.createdAt ?? 0),
+        Number(r.updatedAt ?? 0),
+      ),
+    ),
+  );
+}
+
+async function upsertColaTransfers(db: D1Database, syncCode: string, rows: RowRecord[]): Promise<void> {
+  const stmt = db.prepare(
+    `INSERT INTO cola_transfers (sync_code, id, from_athlete_id, to_athlete_id, amount, note, status, created_by_email, decided_by_email, created_at, decided_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+     ON CONFLICT(sync_code, id) DO UPDATE SET
+       from_athlete_id = excluded.from_athlete_id,
+       to_athlete_id = excluded.to_athlete_id,
+       amount = excluded.amount,
+       note = excluded.note,
+       status = excluded.status,
+       created_by_email = excluded.created_by_email,
+       decided_by_email = excluded.decided_by_email,
+       created_at = excluded.created_at,
+       decided_at = excluded.decided_at`,
+  );
+  await runBatches(
+    db,
+    rows.map((r) =>
+      stmt.bind(
+        syncCode,
+        String(r.id ?? ''),
+        String(r.fromAthleteId ?? ''),
+        String(r.toAthleteId ?? ''),
+        Number(r.amount ?? 0),
+        r.note == null ? null : String(r.note),
+        String(r.status ?? 'pending'),
+        String(r.createdByEmail ?? ''),
+        r.decidedByEmail == null ? null : String(r.decidedByEmail),
+        Number(r.createdAt ?? 0),
+        r.decidedAt == null ? null : Number(r.decidedAt),
+      ),
+    ),
+  );
+}
+
+const mapAthleteClaim = (r: any) => ({
+  athleteId: r.athlete_id,
+  claimCode: r.claim_code,
+  claimedBy: r.claimed_by,
+  claimedAt: r.claimed_at == null ? null : Number(r.claimed_at),
+  createdAt: Number(r.created_at),
+  updatedAt: Number(r.updated_at),
+});
+
+const mapColaTransfer = (r: any) => ({
+  id: r.id,
+  fromAthleteId: r.from_athlete_id,
+  toAthleteId: r.to_athlete_id,
+  amount: Number(r.amount),
+  note: r.note,
+  status: r.status,
+  createdByEmail: r.created_by_email,
+  decidedByEmail: r.decided_by_email,
+  createdAt: Number(r.created_at),
+  decidedAt: r.decided_at == null ? null : Number(r.decided_at),
+});
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -341,6 +425,8 @@ export default {
       const rounds = Array.isArray(data.rounds) ? data.rounds : [];
       const roundStats = Array.isArray(data.roundStats) ? data.roundStats : [];
       const colaLedger = Array.isArray(data.colaLedger) ? data.colaLedger : [];
+      const athleteClaims = Array.isArray(data.athleteClaims) ? data.athleteClaims : [];
+      const colaTransfers = Array.isArray(data.colaTransfers) ? data.colaTransfers : [];
 
       try {
         await upsertAthletes(env.SYNC_DB, syncCode, athletes);
@@ -349,6 +435,8 @@ export default {
         await upsertRounds(env.SYNC_DB, syncCode, rounds);
         await upsertRoundStats(env.SYNC_DB, syncCode, roundStats);
         await upsertColaLedger(env.SYNC_DB, syncCode, colaLedger);
+        await upsertAthleteClaims(env.SYNC_DB, syncCode, athleteClaims);
+        await upsertColaTransfers(env.SYNC_DB, syncCode, colaTransfers);
       } catch (err) {
         return json({ error: `写入 D1 失败：${String(err)}` }, 500);
       }
@@ -362,6 +450,8 @@ export default {
           rounds: rounds.length,
           roundStats: roundStats.length,
           colaLedger: colaLedger.length,
+          athleteClaims: athleteClaims.length,
+          colaTransfers: colaTransfers.length,
         },
       });
     }
@@ -374,7 +464,7 @@ export default {
       const syncCode = sess.email;
 
       try {
-        const [athletes, matches, matchPlayers, rounds, roundStats, colaLedger] = await Promise.all([
+        const [athletes, matches, matchPlayers, rounds, roundStats, colaLedger, athleteClaims, colaTransfers] = await Promise.all([
           env.SYNC_DB.prepare('SELECT id, name, is_deleted, created_at, updated_at FROM athletes WHERE sync_code = ?1')
             .bind(syncCode)
             .all(),
@@ -393,6 +483,12 @@ export default {
           env.SYNC_DB.prepare('SELECT id, type, from_athlete_id, to_athlete_id, amount, match_id, round_id, note, created_at, operator FROM cola_ledger WHERE sync_code = ?1')
             .bind(syncCode)
             .all(),
+          env.SYNC_DB.prepare('SELECT athlete_id, claim_code, claimed_by, claimed_at, created_at, updated_at FROM athlete_claims WHERE sync_code = ?1')
+            .bind(syncCode)
+            .all(),
+          env.SYNC_DB.prepare('SELECT id, from_athlete_id, to_athlete_id, amount, note, status, created_by_email, decided_by_email, created_at, decided_at FROM cola_transfers WHERE sync_code = ?1')
+            .bind(syncCode)
+            .all(),
         ]);
 
         return json({
@@ -404,6 +500,8 @@ export default {
             rounds: (rounds.results || []).map(mapRound),
             roundStats: (roundStats.results || []).map(mapRoundStat),
             colaLedger: (colaLedger.results || []).map(mapColaLedger),
+            athleteClaims: (athleteClaims.results || []).map(mapAthleteClaim),
+            colaTransfers: (colaTransfers.results || []).map(mapColaTransfer),
           },
         });
       } catch (err) {

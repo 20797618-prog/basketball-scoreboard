@@ -1,11 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  buildTransferEntries,
+  buildLedgerEntryFromTransfer,
+  buildPendingTransfers,
   calculateColaBalances,
+  listMyAthleteIds,
+  listPendingForMe,
+  listPendingFromMe,
 } from '../../application/usecases/colaService';
-import type { Athlete, ColaLedgerEntry } from '../../domain/types';
+import type {
+  Athlete,
+  AthleteClaim,
+  ColaLedgerEntry,
+  ColaTransfer,
+} from '../../domain/types';
+import { getCurrentEmail } from '../../infrastructure/auth/authService';
+import { AthleteClaimRepositoryDexie } from '../../infrastructure/repositories/local/athleteClaimRepositoryDexie';
 import { AthleteRepositoryDexie } from '../../infrastructure/repositories/local/athleteRepositoryDexie';
 import { ColaLedgerRepositoryDexie } from '../../infrastructure/repositories/local/colaLedgerRepositoryDexie';
+import { ColaTransferRepositoryDexie } from '../../infrastructure/repositories/local/colaTransferRepositoryDexie';
 
 interface TransferDraft {
   toAthleteId: string;
@@ -14,6 +26,8 @@ interface TransferDraft {
 
 const athleteRepo = new AthleteRepositoryDexie();
 const colaRepo = new ColaLedgerRepositoryDexie();
+const claimRepo = new AthleteClaimRepositoryDexie();
+const transferRepo = new ColaTransferRepositoryDexie();
 
 function rankTone(rank: number) {
   if (rank === 1) return 'is-first';
@@ -23,7 +37,10 @@ function rankTone(rank: number) {
 }
 
 export function ColaPage() {
+  const [email, setEmail] = useState<string | null>(null);
   const [athletes, setAthletes] = useState<Athlete[]>([]);
+  const [claims, setClaims] = useState<AthleteClaim[]>([]);
+  const [transfers, setTransfers] = useState<ColaTransfer[]>([]);
   const [entries, setEntries] = useState<ColaLedgerEntry[]>([]);
   const [transferFromId, setTransferFromId] = useState('');
   const [transferRows, setTransferRows] = useState<TransferDraft[]>([
@@ -39,28 +56,37 @@ export function ColaPage() {
   }, []);
 
   const boot = async () => {
-    const [activeAthletes, ledger] = await Promise.all([
+    const currentEmail = getCurrentEmail();
+    setEmail(currentEmail);
+
+    const [activeAthletes, ledger, transferRows] = await Promise.all([
       athleteRepo.listActive(),
       colaRepo.listAll(),
+      transferRepo.listAll(),
     ]);
+
+    const claimRows = await claimRepo.ensureForAthletes(activeAthletes.map((a) => a.id));
+    const myIds = listMyAthleteIds(claimRows, currentEmail ?? '');
 
     setAthletes(activeAthletes);
     setEntries(ledger);
+    setClaims(claimRows);
+    setTransfers(transferRows);
 
-    if (activeAthletes.length > 0) {
-      const firstId = activeAthletes[0].id;
-      setTransferFromId((prev) => prev || firstId);
-      setTransferRows((prev) =>
-        prev.map((item, index) =>
-          index === 0 && !item.toAthleteId
-            ? {
-                ...item,
-                toAthleteId: activeAthletes.length > 1 ? activeAthletes[1].id : firstId,
-              }
-            : item,
-        ),
-      );
-    }
+    setTransferFromId((prev) => (prev && myIds.includes(prev) ? prev : myIds[0] ?? ''));
+    setTransferRows((prev) =>
+      prev.map((item, index) =>
+        index === 0 && !item.toAthleteId
+          ? {
+              ...item,
+              toAthleteId:
+                activeAthletes.length > 1
+                  ? activeAthletes[1].id
+                  : activeAthletes[0]?.id ?? '',
+            }
+          : item,
+      ),
+    );
   };
 
   const athleteMap = useMemo(() => {
@@ -68,6 +94,31 @@ export function ColaPage() {
     athletes.forEach((a) => map.set(a.id, a));
     return map;
   }, [athletes]);
+
+  const nameOf = (id: string | null) => (id ? athleteMap.get(id)?.name ?? id : '系统');
+
+  const myAthleteIds = useMemo(
+    () => listMyAthleteIds(claims, email ?? ''),
+    [claims, email],
+  );
+
+  const myAthletes = useMemo(
+    () =>
+      myAthleteIds
+        .map((id) => athleteMap.get(id))
+        .filter((a): a is Athlete => !!a),
+    [myAthleteIds, athleteMap],
+  );
+
+  const pendingForMe = useMemo(
+    () => listPendingForMe(transfers, myAthleteIds, email ?? ''),
+    [transfers, myAthleteIds, email],
+  );
+
+  const pendingFromMe = useMemo(
+    () => listPendingFromMe(transfers, email ?? ''),
+    [transfers, email],
+  );
 
   const balances = useMemo(
     () => calculateColaBalances(athletes.map((a) => a.id), entries),
@@ -96,39 +147,123 @@ export function ColaPage() {
     );
   };
 
+  /** 发起转让：只生成待确认申请，不动任何人的余额。 */
   const submitTransfer = async () => {
     setError('');
     setSuccess('');
+
+    if (!email) {
+      setError('请先登录后再发起转让。');
+      return;
+    }
+    if (myAthleteIds.length === 0) {
+      setError('当前账号还没有认领球员，请先到「球员」页认领自己。');
+      return;
+    }
+    if (!transferFromId) {
+      setError('请选择转出人。');
+      return;
+    }
 
     const targets = transferRows
       .map((row) => ({
         toAthleteId: row.toAthleteId,
         amount: Math.max(0, Math.floor(row.amount || 0)),
       }))
-      .filter((row) => row.toAthleteId && row.amount > 0 && row.toAthleteId !== transferFromId);
+      .filter(
+        (row) =>
+          row.toAthleteId && row.amount > 0 && row.toAthleteId !== transferFromId,
+      );
 
-    if (!transferFromId) {
-      setError('请选择转出人。');
-      return;
-    }
     if (targets.length === 0) {
-      setError('请至少填写一条有效转账（金额>0，且不能转给自己）。');
+      setError('请至少填写一条有效转让（金额>0，且不能转给自己）。');
       return;
     }
 
-    const newEntries = buildTransferEntries(transferFromId, targets, transferNote.trim() || undefined);
-    await colaRepo.append(newEntries);
+    const pending = buildPendingTransfers(
+      transferFromId,
+      targets,
+      transferNote.trim() || undefined,
+      email,
+    );
+    await transferRepo.createMany(pending);
+    setTransfers(await transferRepo.listAll());
+    setTransferNote('');
+    setSuccess(`已发起 ${pending.length} 笔转让申请，等对方确认后才会计入可乐余额。`);
+  };
+
+  /** 同意：先写正式账本（幂等 id），再把申请标记为已同意。 */
+  const approveTransfer = async (row: ColaTransfer) => {
+    setError('');
+    setSuccess('');
+    if (!email) return;
+
+    if (!myAthleteIds.includes(row.toAthleteId)) {
+      setError('这笔转让不是转给你的，无法确认。');
+      return;
+    }
+    if (row.createdByEmail.trim().toLowerCase() === email.trim().toLowerCase()) {
+      setError('不能确认自己发起的申请。');
+      return;
+    }
+
+    const decidedAt = Date.now();
+    const decided: ColaTransfer = {
+      ...row,
+      status: 'approved',
+      decidedByEmail: email,
+      decidedAt,
+    };
+
+    await colaRepo.append([buildLedgerEntryFromTransfer(decided)]);
+    await transferRepo.patch(row.id, {
+      status: 'approved',
+      decidedByEmail: email,
+      decidedAt,
+    });
+
     setEntries(await colaRepo.listAll());
-    setSuccess('批量转账已完成。');
+    setTransfers(await transferRepo.listAll());
+    setSuccess(
+      `已同意：${nameOf(row.fromAthleteId)} → ${nameOf(row.toAthleteId)} ${row.amount} 瓶。`,
+    );
+  };
+
+  const rejectTransfer = async (row: ColaTransfer) => {
+    setError('');
+    setSuccess('');
+    if (!email) return;
+    if (!myAthleteIds.includes(row.toAthleteId)) {
+      setError('这笔转让不是转给你的，无法处理。');
+      return;
+    }
+
+    await transferRepo.patch(row.id, {
+      status: 'rejected',
+      decidedByEmail: email,
+      decidedAt: Date.now(),
+    });
+    setTransfers(await transferRepo.listAll());
+    setSuccess('已拒绝该笔转让申请。');
+  };
+
+  const cancelTransfer = async (row: ColaTransfer) => {
+    setError('');
+    setSuccess('');
+    if (!email) return;
+
+    await transferRepo.patch(row.id, {
+      status: 'canceled',
+      decidedByEmail: email,
+      decidedAt: Date.now(),
+    });
+    setTransfers(await transferRepo.listAll());
+    setSuccess('已撤销该笔申请。');
   };
 
   const describeEntry = (entry: ColaLedgerEntry) => {
-    const fromName = entry.fromAthleteId
-      ? (athleteMap.get(entry.fromAthleteId)?.name ?? entry.fromAthleteId)
-      : '系统';
-    const toName = entry.toAthleteId
-      ? (athleteMap.get(entry.toAthleteId)?.name ?? entry.toAthleteId)
-      : '系统';
+    const fromName = nameOf(entry.fromAthleteId);
+    const toName = nameOf(entry.toAthleteId);
 
     if (entry.type === 'transfer') {
       return `${fromName} -> ${toName}：${entry.amount} 瓶`;
@@ -142,12 +277,66 @@ export function ColaPage() {
     return `${fromName} -> ${toName}：${entry.amount} 瓶（调整）`;
   };
 
+  const recentDecided = useMemo(
+    () => transfers.filter((row) => row.status !== 'pending').slice(0, 10),
+    [transfers],
+  );
+
   return (
     <main className="page">
       <section className="card">
         <h1 className="title">可乐市场</h1>
-        <p className="subtitle">支持批量转账、流水查询（余额可为负）。</p>
+        <p className="subtitle">转让需对方确认：A 发起 → B 同意后才会入账。</p>
+        {!email ? (
+          <p className="error-text">
+            当前未登录：可以查看数据，但无法发起或确认转让。请到「比赛」页登录。
+          </p>
+        ) : (
+          <p className="subtitle">
+            当前账号：{email}｜我认领的球员：
+            {myAthletes.length > 0
+              ? myAthletes.map((a) => a.name).join('、')
+              : '（还没认领，请到「球员」页认领）'}
+          </p>
+        )}
       </section>
+
+      {pendingForMe.length > 0 ? (
+        <section className="card">
+          <p className="subtitle">待我确认（{pendingForMe.length} 笔）</p>
+          <ul className="list-reset">
+            {pendingForMe.map((row) => (
+              <li key={row.id} className="ledger-item">
+                <div className="row-between">
+                  <strong>
+                    {nameOf(row.fromAthleteId)} → {nameOf(row.toAthleteId)}：{row.amount} 瓶
+                  </strong>
+                  <div className="inline-actions">
+                    <button
+                      className="button button-small"
+                      type="button"
+                      onClick={() => void approveTransfer(row)}
+                    >
+                      同意
+                    </button>
+                    <button
+                      className="button button-small button-ghost"
+                      type="button"
+                      onClick={() => void rejectTransfer(row)}
+                    >
+                      拒绝
+                    </button>
+                  </div>
+                </div>
+                <div className="subtitle">
+                  {row.note ? `备注：${row.note}｜` : ''}发起人：{row.createdByEmail}｜
+                  {new Date(row.createdAt).toLocaleString()}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section className="card">
         <p className="subtitle">可乐榜（按余额）</p>
@@ -162,23 +351,28 @@ export function ColaPage() {
             <div key={athlete.id} className="ranking-row ranking-grid-cola">
               <span className={`rank-pill ${rankTone(index + 1)}`}>#{index + 1}</span>
               <span className="ranking-name">{athlete.name}</span>
-              <strong className="result-num ranking-value">{balances[athlete.id] ?? 0} 瓶</strong>
+              <strong className="result-num ranking-value">
+                {balances[athlete.id] ?? 0} 瓶
+              </strong>
             </div>
           ))}
         </div>
       </section>
 
       <section className="card">
-        <p className="subtitle">批量转账</p>
+        <p className="subtitle">发起转让（需对方同意）</p>
         <div className="stack-sm">
-          <label className="field-label">转出人</label>
+          <label className="field-label">转出人（只能选自己认领的球员）</label>
           <select
             className="select-input"
             value={transferFromId}
             onChange={(e) => setTransferFromId(e.target.value)}
+            disabled={myAthletes.length === 0}
           >
-            <option value="">请选择</option>
-            {athletes.map((athlete) => (
+            <option value="">
+              {myAthletes.length === 0 ? '请先到「球员」页认领自己' : '请选择'}
+            </option>
+            {myAthletes.map((athlete) => (
               <option key={athlete.id} value={athlete.id}>
                 {athlete.name}
               </option>
@@ -233,11 +427,57 @@ export function ColaPage() {
             placeholder="例如：请喝可乐"
           />
 
-          <button className="button" type="button" onClick={submitTransfer}>
-            确认转账
+          <button
+            className="button"
+            type="button"
+            onClick={submitTransfer}
+            disabled={!email || myAthletes.length === 0}
+          >
+            发起转让
           </button>
         </div>
       </section>
+
+      {pendingFromMe.length > 0 || recentDecided.length > 0 ? (
+        <section className="card">
+          <p className="subtitle">转让记录（待确认 {pendingFromMe.length} 笔）</p>
+          <ul className="list-reset">
+            {[...pendingFromMe, ...recentDecided].map((row) => (
+              <li key={row.id} className="ledger-item">
+                <div className="row-between">
+                  <strong>
+                    {nameOf(row.fromAthleteId)} → {nameOf(row.toAthleteId)}：{row.amount} 瓶
+                    <span className={`status-pill status-${row.status}`}>
+                      {row.status === 'pending'
+                        ? '待确认'
+                        : row.status === 'approved'
+                          ? '已同意'
+                          : row.status === 'rejected'
+                            ? '已拒绝'
+                            : '已撤销'}
+                    </span>
+                  </strong>
+                  {row.status === 'pending' &&
+                  email &&
+                  row.createdByEmail.trim().toLowerCase() === email.trim().toLowerCase() ? (
+                    <button
+                      className="button button-small button-ghost"
+                      type="button"
+                      onClick={() => void cancelTransfer(row)}
+                    >
+                      撤销
+                    </button>
+                  ) : null}
+                </div>
+                <div className="subtitle">
+                  {row.note ? `备注：${row.note}｜` : ''}发起人：{row.createdByEmail}｜
+                  {new Date(row.createdAt).toLocaleString()}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section className="card">
         <div className="inline-actions">

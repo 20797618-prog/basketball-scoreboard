@@ -2,7 +2,9 @@ import { z } from 'zod';
 import { appDb } from '../../infrastructure/db/appDb';
 import type {
   Athlete,
+  AthleteClaim,
   ColaLedgerEntry,
+  ColaTransfer,
   Match,
   MatchPlayer,
   Round,
@@ -92,6 +94,33 @@ const appMetaSchema = z.object({
   value: z.unknown(),
 });
 
+const athleteClaimSchema = z.object({
+  athleteId: z.string(),
+  claimCode: z.string(),
+  claimedBy: z.string().nullable(),
+  claimedAt: z.number().nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+const colaTransferSchema = z.object({
+  id: z.string(),
+  fromAthleteId: z.string(),
+  toAthleteId: z.string(),
+  amount: z.number(),
+  note: z.string().nullable(),
+  status: z.union([
+    z.literal('pending'),
+    z.literal('approved'),
+    z.literal('rejected'),
+    z.literal('canceled'),
+  ]),
+  createdByEmail: z.string(),
+  decidedByEmail: z.string().nullable(),
+  createdAt: z.number(),
+  decidedAt: z.number().nullable(),
+});
+
 const oplogSchema = z.object({
   id: z.string(),
   entity: z.string(),
@@ -112,6 +141,9 @@ const archiveSchema = z.object({
     rounds: z.array(roundSchema),
     roundStats: z.array(roundStatSchema),
     colaLedger: z.array(colaLedgerSchema),
+    // 旧存档没有这两项，给默认值以便向后兼容
+    athleteClaims: z.array(athleteClaimSchema).default([]),
+    colaTransfers: z.array(colaTransferSchema).default([]),
     appMeta: z.array(appMetaSchema),
     oplog: z.array(oplogSchema),
   }),
@@ -127,6 +159,8 @@ export interface ArchivePayload {
     rounds: Round[];
     roundStats: RoundStat[];
     colaLedger: ColaLedgerEntry[];
+    athleteClaims: AthleteClaim[];
+    colaTransfers: ColaTransfer[];
     appMeta: AppMetaRecord[];
     oplog: OplogRecord[];
   };
@@ -140,6 +174,8 @@ export async function exportArchive(): Promise<ArchivePayload> {
     rounds,
     roundStats,
     colaLedger,
+    athleteClaims,
+    colaTransfers,
     appMeta,
     oplog,
   ] = await Promise.all([
@@ -149,6 +185,8 @@ export async function exportArchive(): Promise<ArchivePayload> {
     appDb.rounds.toArray(),
     appDb.roundStats.toArray(),
     appDb.colaLedger.toArray(),
+    appDb.athleteClaims.toArray(),
+    appDb.colaTransfers.toArray(),
     appDb.appMeta.toArray(),
     appDb.oplog.toArray(),
   ]);
@@ -163,6 +201,8 @@ export async function exportArchive(): Promise<ArchivePayload> {
       rounds,
       roundStats,
       colaLedger,
+      athleteClaims,
+      colaTransfers,
       appMeta,
       oplog,
     },
@@ -196,6 +236,8 @@ export async function importArchiveFromJson(jsonText: string): Promise<void> {
       appDb.rounds,
       appDb.roundStats,
       appDb.colaLedger,
+      appDb.athleteClaims,
+      appDb.colaTransfers,
       appDb.appMeta,
       appDb.oplog,
     ],
@@ -207,6 +249,8 @@ export async function importArchiveFromJson(jsonText: string): Promise<void> {
         appDb.rounds.clear(),
         appDb.roundStats.clear(),
         appDb.colaLedger.clear(),
+        appDb.athleteClaims.clear(),
+        appDb.colaTransfers.clear(),
         appDb.appMeta.clear(),
         appDb.oplog.clear(),
       ]);
@@ -222,6 +266,14 @@ export async function importArchiveFromJson(jsonText: string): Promise<void> {
       }
       if (payload.data.colaLedger.length > 0) {
         await appDb.colaLedger.bulkAdd(payload.data.colaLedger);
+      }
+      const claims = payload.data.athleteClaims ?? [];
+      if (claims.length > 0) {
+        await appDb.athleteClaims.bulkAdd(claims);
+      }
+      const transfers = payload.data.colaTransfers ?? [];
+      if (transfers.length > 0) {
+        await appDb.colaTransfers.bulkAdd(transfers);
       }
       if (payload.data.appMeta.length > 0) await appDb.appMeta.bulkAdd(payload.data.appMeta);
       if (payload.data.oplog.length > 0) await appDb.oplog.bulkAdd(payload.data.oplog);

@@ -72,7 +72,9 @@ async function run() {
       r.counts.matchPlayers +
       r.counts.rounds +
       r.counts.roundStats +
-      r.counts.colaLedger;
+      r.counts.colaLedger +
+      r.counts.athleteClaims +
+      r.counts.colaTransfers;
     const time = new Date().toLocaleTimeString();
     emit({ text: `已自动备份（${time}，共 ${total} 条）`, kind: 'ok' });
   } catch (err) {
@@ -104,6 +106,8 @@ export function initAutoBackup(): void {
     'rounds',
     'roundStats',
     'colaLedger',
+    'athleteClaims',
+    'colaTransfers',
   ] as const;
   const hooks = ['creating', 'updating', 'deleting'] as const;
 

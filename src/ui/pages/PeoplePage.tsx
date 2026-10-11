@@ -1,16 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { calculateColaBalances } from '../../application/usecases/colaService';
+import { AthleteClaimRepositoryDexie } from '../../infrastructure/repositories/local/athleteClaimRepositoryDexie';
 import { AthleteRepositoryDexie } from '../../infrastructure/repositories/local/athleteRepositoryDexie';
 import { ColaLedgerRepositoryDexie } from '../../infrastructure/repositories/local/colaLedgerRepositoryDexie';
 import { RoundRepositoryDexie } from '../../infrastructure/repositories/local/roundRepositoryDexie';
-import type { Athlete, Round } from '../../domain/types';
+import { getCurrentEmail } from '../../infrastructure/auth/authService';
+import { formatClaimCode } from '../../shared/claimCode';
+import type { Athlete, AthleteClaim, Round } from '../../domain/types';
 
 const athleteRepo = new AthleteRepositoryDexie();
 const roundRepo = new RoundRepositoryDexie();
 const colaRepo = new ColaLedgerRepositoryDexie();
+const claimRepo = new AthleteClaimRepositoryDexie();
 
 export function PeoplePage() {
   const [list, setList] = useState<Athlete[]>([]);
+  const [claims, setClaims] = useState<AthleteClaim[]>([]);
+  const [email, setEmail] = useState<string | null>(null);
+  const [codeInputs, setCodeInputs] = useState<Record<string, string>>({});
   const [name, setName] = useState('');
   const [editingId, setEditingId] = useState('');
   const [editingName, setEditingName] = useState('');
@@ -24,6 +31,9 @@ export function PeoplePage() {
   }, []);
 
   const refresh = async () => {
+    const currentEmail = getCurrentEmail();
+    setEmail(currentEmail);
+
     const [athletes, stats, ledger, rounds] = await Promise.all([
       athleteRepo.listAll(),
       roundRepo.listAllRoundStats(),
@@ -31,7 +41,12 @@ export function PeoplePage() {
       roundRepo.listAllRounds() as Promise<Round[]>,
     ]);
 
+    const claimRows = await claimRepo.ensureForAthletes(
+      athletes.filter((a) => !a.isDeleted).map((a) => a.id),
+    );
+
     setList(athletes);
+    setClaims(claimRows);
 
     const pointRecord: Record<string, number> = {};
     // roundId → 轮次键（matchId-roundNo）：同一场比赛同一轮号视为同一轮
@@ -80,6 +95,51 @@ export function PeoplePage() {
     () => [...list].sort((a, b) => Number(a.isDeleted) - Number(b.isDeleted)),
     [list],
   );
+
+  const claimMap = useMemo(() => {
+    const map = new Map<string, AthleteClaim>();
+    claims.forEach((row) => map.set(row.athleteId, row));
+    return map;
+  }, [claims]);
+
+  const claimedByMe = (athleteId: string) => {
+    const row = claimMap.get(athleteId);
+    if (!row?.claimedBy || !email) return false;
+    return row.claimedBy.trim().toLowerCase() === email.trim().toLowerCase();
+  };
+
+  const claimAthlete = async (athleteId: string) => {
+    setMessage('');
+    if (!email) {
+      setMessage('请先到「比赛」页登录后再认领球员。');
+      return;
+    }
+    const code = codeInputs[athleteId] ?? '';
+    if (!code.trim()) {
+      setMessage('请先输入认领码。');
+      return;
+    }
+    try {
+      await claimRepo.claimByCode(athleteId, code, email);
+      setCodeInputs((prev) => ({ ...prev, [athleteId]: '' }));
+      setMessage('认领成功，现在可以用这个身份发起可乐转让了。');
+      await refresh();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const releaseAthlete = async (athleteId: string) => {
+    setMessage('');
+    if (!email) return;
+    try {
+      await claimRepo.release(athleteId, email);
+      setMessage('已解除认领。');
+      await refresh();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const createAthlete = async () => {
     setMessage('');
@@ -132,7 +192,14 @@ export function PeoplePage() {
     <main className="page">
       <section className="card">
         <h1 className="title">球员库</h1>
-        <p className="subtitle">新增、改名、停用（停用后不影响历史战绩）。</p>
+        <p className="subtitle">
+          新增、改名、停用（停用后不影响历史战绩）。球员需用认领码绑定账号，才能发起可乐转让。
+        </p>
+        {email ? (
+          <p className="subtitle">当前账号：{email}</p>
+        ) : (
+          <p className="subtitle">当前未登录：可以查看，但无法认领球员。</p>
+        )}
         <div className="inline-actions">
           <input
             className="text-input"
@@ -203,6 +270,61 @@ export function PeoplePage() {
                     积分：{pointsMap[item.id] ?? 0} ｜ 可乐：{colaMap[item.id] ?? 0} ｜ 胜率：
                     {winRateMap[item.id] ?? '0.0%'}
                   </div>
+                  {!item.isDeleted ? (
+                    <div className="stack-sm claim-row">
+                      {claimMap.get(item.id)?.claimedBy ? (
+                        <div className="row-between">
+                          <span className="subtitle">
+                            已认领：{claimMap.get(item.id)?.claimedBy}
+                            {claimedByMe(item.id) ? '（我）' : ''}
+                          </span>
+                          {claimedByMe(item.id) ? (
+                            <button
+                              className="button button-small button-ghost"
+                              type="button"
+                              onClick={() => void releaseAthlete(item.id)}
+                            >
+                              解除认领
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <>
+                          <div className="subtitle">
+                            未认领 · 认领码：
+                            <strong className="claim-code">
+                              {formatClaimCode(claimMap.get(item.id)?.claimCode ?? '')}
+                            </strong>
+                            <span className="subtitle">
+                              （本人登录后输入此码即可认领）
+                            </span>
+                          </div>
+                          <div className="inline-actions">
+                            <input
+                              className="text-input"
+                              value={codeInputs[item.id] ?? ''}
+                              onChange={(e) =>
+                                setCodeInputs((prev) => ({
+                                  ...prev,
+                                  [item.id]: e.target.value.toUpperCase(),
+                                }))
+                              }
+                              placeholder="输入认领码"
+                              maxLength={8}
+                            />
+                            <button
+                              className="button button-small"
+                              type="button"
+                              onClick={() => void claimAthlete(item.id)}
+                              disabled={!email}
+                            >
+                              认领
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : null}
                 </>
               )}
             </li>

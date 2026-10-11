@@ -1,6 +1,8 @@
 import type {
   Athlete,
+  AthleteClaim,
   ColaLedgerEntry,
+  ColaTransfer,
   Match,
   MatchPlayer,
   Round,
@@ -37,4 +39,21 @@ export interface ColaLedgerRepository {
   append(entries: ColaLedgerEntry[]): Promise<void>;
   listAll(): Promise<ColaLedgerEntry[]>;
   deleteByRound(roundId: string): Promise<void>;
+}
+
+export interface AthleteClaimRepository {
+  /** 列出全部认领记录。 */
+  listAll(): Promise<AthleteClaim[]>;
+  /** 为缺少认领记录的球员补齐（生成认领码），返回最新全量。 */
+  ensureForAthletes(athleteIds: string[]): Promise<AthleteClaim[]>;
+  /** 凭认领码把球员绑定到 email；码不对时抛错。 */
+  claimByCode(athleteId: string, code: string, email: string): Promise<void>;
+  /** 解除绑定（仅限本人）。 */
+  release(athleteId: string, email: string): Promise<void>;
+}
+
+export interface ColaTransferRepository {
+  listAll(): Promise<ColaTransfer[]>;
+  createMany(rows: ColaTransfer[]): Promise<void>;
+  patch(id: string, patch: Partial<ColaTransfer>): Promise<void>;
 }

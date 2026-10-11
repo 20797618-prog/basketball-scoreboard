@@ -250,6 +250,48 @@ body {
   gap: 9px;
 }
 
+.claim-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.claim-code {
+  letter-spacing: 2px;
+  color: var(--accent);
+  font-size: 15px;
+}
+
+.status-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+
+.status-pending {
+  background: #f5b30122;
+  color: #8a6a00;
+}
+
+.status-approved {
+  background: #2e9e5b22;
+  color: #1d6b3d;
+}
+
+.status-rejected {
+  background: #d9534f22;
+  color: #9a2f2c;
+}
+
+.status-canceled {
+  background: #00000012;
+  color: var(--text-dim);
+}
+
 .field-label {
   font-size: 13px;
   color: var(--text-dim);

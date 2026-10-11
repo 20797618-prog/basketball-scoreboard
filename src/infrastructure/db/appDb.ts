@@ -1,7 +1,9 @@
 import Dexie, { type Table } from 'dexie';
 import type {
   Athlete,
+  AthleteClaim,
   ColaLedgerEntry,
+  ColaTransfer,
   Match,
   MatchPlayer,
   Round,
@@ -30,6 +32,8 @@ export class AppDb extends Dexie {
   rounds!: Table<Round, string>;
   roundStats!: Table<RoundStat, string>;
   colaLedger!: Table<ColaLedgerEntry, string>;
+  athleteClaims!: Table<AthleteClaim, string>;
+  colaTransfers!: Table<ColaTransfer, string>;
   appMeta!: Table<AppMetaRecord, string>;
   oplog!: Table<OplogRecord, string>;
 
@@ -45,6 +49,12 @@ export class AppDb extends Dexie {
       colaLedger: 'id, type, fromAthleteId, toAthleteId, createdAt, matchId',
       appMeta: 'key',
       oplog: 'id, entity, entityId, op, createdAt, synced',
+    });
+
+    // v2：球员认领（账号绑定）+ 可乐转让待确认
+    this.version(2).stores({
+      athleteClaims: 'athleteId, claimCode, claimedBy, createdAt',
+      colaTransfers: 'id, status, fromAthleteId, toAthleteId, createdByEmail, createdAt',
     });
   }
 }
