@@ -14,6 +14,7 @@ import type {
   ColaTransfer,
 } from '../../domain/types';
 import { getCurrentEmail } from '../../infrastructure/auth/authService';
+import { DATA_REFRESHED_EVENT } from '../../infrastructure/cloudbase/cloudRefresh';
 import { AthleteClaimRepositoryDexie } from '../../infrastructure/repositories/local/athleteClaimRepositoryDexie';
 import { AthleteRepositoryDexie } from '../../infrastructure/repositories/local/athleteRepositoryDexie';
 import { ColaLedgerRepositoryDexie } from '../../infrastructure/repositories/local/colaLedgerRepositoryDexie';
@@ -53,6 +54,12 @@ export function ColaPage() {
 
   useEffect(() => {
     void boot();
+    // 云端数据被刷新时（队友在他手机上操作、或定时拉取），重新读取本地数据
+    const onRefreshed = () => {
+      void boot();
+    };
+    window.addEventListener(DATA_REFRESHED_EVENT, onRefreshed);
+    return () => window.removeEventListener(DATA_REFRESHED_EVENT, onRefreshed);
   }, []);
 
   const boot = async () => {

@@ -5,8 +5,10 @@ import { MatchPage } from './ui/pages/MatchPage';
 import { PeoplePage } from './ui/pages/PeoplePage';
 import { StatsPage } from './ui/pages/StatsPage';
 import { initAutoBackup } from './infrastructure/cloudbase/autoBackup';
+import { startCloudRefresh } from './infrastructure/cloudbase/cloudRefresh';
 
 initAutoBackup();
+startCloudRefresh();
 
 export function App() {
   return (

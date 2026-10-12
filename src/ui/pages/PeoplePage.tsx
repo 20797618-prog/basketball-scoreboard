@@ -5,6 +5,7 @@ import { AthleteRepositoryDexie } from '../../infrastructure/repositories/local/
 import { ColaLedgerRepositoryDexie } from '../../infrastructure/repositories/local/colaLedgerRepositoryDexie';
 import { RoundRepositoryDexie } from '../../infrastructure/repositories/local/roundRepositoryDexie';
 import { getCurrentEmail } from '../../infrastructure/auth/authService';
+import { DATA_REFRESHED_EVENT } from '../../infrastructure/cloudbase/cloudRefresh';
 import { formatClaimCode } from '../../shared/claimCode';
 import type { Athlete, AthleteClaim, Round } from '../../domain/types';
 
@@ -28,6 +29,12 @@ export function PeoplePage() {
 
   useEffect(() => {
     void refresh();
+    // 云端数据被刷新时重新读取，保证多台设备之间看到同一份数据
+    const onRefreshed = () => {
+      void refresh();
+    };
+    window.addEventListener(DATA_REFRESHED_EVENT, onRefreshed);
+    return () => window.removeEventListener(DATA_REFRESHED_EVENT, onRefreshed);
   }, []);
 
   const refresh = async () => {
