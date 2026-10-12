@@ -286,9 +286,13 @@ export function buildHitRateRanking(stats: RoundStat[]): HitRateRow[] {
 export function buildDailyHitRate(stats: RoundStat[]): DailyHitRateRow[] {
   const map = new Map<string, { hits: number; attempts: number; athletes: Set<string> }>();
 
+  // 日期键必须补零：否则字符串排序会把 2026-10-1 判在 2026-9-30 之前，
+  // 导致「每日命中率」列表和趋势图的日期顺序错乱。补零后字符串排序即等于时间排序。
+  const pad = (n: number) => String(n).padStart(2, '0');
+
   stats.forEach((row) => {
     const day = new Date(row.createdAt);
-    const key = `${day.getFullYear()}-${day.getMonth() + 1}-${day.getDate()}`;
+    const key = `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
     const prev = map.get(key) ?? { hits: 0, attempts: 0, athletes: new Set<string>() };
     prev.hits += row.hits;
     prev.attempts += row.attempts;
@@ -308,6 +312,7 @@ export function buildDailyHitRate(stats: RoundStat[]): DailyHitRateRow[] {
         athleteCount: v.athletes.size,
       };
     })
+    // 旧 → 新（列表从上到下、趋势图从左到右都用这个顺序）
     .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
 }
 
