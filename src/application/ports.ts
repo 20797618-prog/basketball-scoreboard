@@ -15,6 +15,8 @@ export interface AthleteRepository {
   create(name: string): Promise<Athlete>;
   updateName(id: string, name: string): Promise<void>;
   softDelete(id: string): Promise<void>;
+  /** 恢复被停用的球员（停用的逆操作，历史战绩不受影响）。 */
+  restore(id: string): Promise<void>;
 }
 
 export interface MatchRepository {

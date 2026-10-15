@@ -61,12 +61,15 @@ export class AthleteClaimRepositoryDexie implements AthleteClaimRepository {
     });
   }
 
-  async release(athleteId: string, email: string): Promise<void> {
+  /**
+   * 解除认领。
+   *
+   * 数据现在是全队共享的一份，球员认领相当于队内的登记，不是私有资产；
+   * 认领错了（比如用了别人的邮箱）需要有人能改回来，因此不做"只能解自己"的限制。
+   */
+  async release(athleteId: string, _email: string): Promise<void> {
     const row = await appDb.athleteClaims.get(athleteId);
     if (!row?.claimedBy) return;
-    if (row.claimedBy !== email) {
-      throw new Error('只能解除自己认领的球员。');
-    }
     await appDb.athleteClaims.update(athleteId, {
       claimedBy: null,
       claimedAt: null,

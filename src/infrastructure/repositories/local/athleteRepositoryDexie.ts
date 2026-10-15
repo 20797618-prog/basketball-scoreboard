@@ -32,4 +32,8 @@ export class AthleteRepositoryDexie implements AthleteRepository {
   async softDelete(id: string): Promise<void> {
     await appDb.athletes.update(id, { isDeleted: true, updatedAt: Date.now() });
   }
+
+  async restore(id: string): Promise<void> {
+    await appDb.athletes.update(id, { isDeleted: false, updatedAt: Date.now() });
+  }
 }

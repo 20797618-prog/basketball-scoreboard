@@ -195,6 +195,13 @@ export function PeoplePage() {
     await refresh();
   };
 
+  const restoreAthlete = async (id: string) => {
+    setMessage('');
+    await athleteRepo.restore(id);
+    setMessage('已恢复。');
+    await refresh();
+  };
+
   return (
     <main className="page">
       <section className="card">
@@ -263,14 +270,23 @@ export function PeoplePage() {
                       >
                         改名
                       </button>
-                      <button
-                        className="button button-small button-ghost"
-                        onClick={() => void softDelete(item.id)}
-                        type="button"
-                        disabled={item.isDeleted}
-                      >
-                        停用
-                      </button>
+                      {item.isDeleted ? (
+                        <button
+                          className="button button-small"
+                          onClick={() => void restoreAthlete(item.id)}
+                          type="button"
+                        >
+                          恢复
+                        </button>
+                      ) : (
+                        <button
+                          className="button button-small button-ghost"
+                          onClick={() => void softDelete(item.id)}
+                          type="button"
+                        >
+                          停用
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="subtitle">
@@ -285,15 +301,13 @@ export function PeoplePage() {
                             已认领：{claimMap.get(item.id)?.claimedBy}
                             {claimedByMe(item.id) ? '（我）' : ''}
                           </span>
-                          {claimedByMe(item.id) ? (
-                            <button
-                              className="button button-small button-ghost"
-                              type="button"
-                              onClick={() => void releaseAthlete(item.id)}
-                            >
-                              解除认领
-                            </button>
-                          ) : null}
+                          <button
+                            className="button button-small button-ghost"
+                            type="button"
+                            onClick={() => void releaseAthlete(item.id)}
+                          >
+                            解除认领
+                          </button>
                         </div>
                       ) : (
                         <>
