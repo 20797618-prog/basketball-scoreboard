@@ -295,6 +295,29 @@ body {
   border-bottom: 1px dashed var(--border);
 }
 
+/* 每日命中率「按人显示」的图例 */
+.trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 6px 0 10px;
+}
+
+.trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.trend-legend-item i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
 .button-wechat {
   width: 100%;
   background: #07c160;

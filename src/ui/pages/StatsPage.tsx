@@ -43,6 +43,14 @@ interface DebugCounts {
   ledger: number;
 }
 
+/** 每日命中率「按人显示」时的一条序列（values 与日期轴一一对应，null = 当天没投篮）。 */
+interface TrendSeries {
+  athleteId: string;
+  name: string;
+  color: string;
+  values: (number | null)[];
+}
+
 type ScopeFilter = 'global' | 'month';
 
 export function StatsPage() {
@@ -56,6 +64,8 @@ export function StatsPage() {
   const [monthValue, setMonthValue] = useState('');
   const [athleteFilterId, setAthleteFilterId] = useState(allFilterValue());
   const [showPointLedger, setShowPointLedger] = useState(false);
+  // 每日命中率：关=合计一条线；开=每个球员一条线
+  const [showPerAthleteTrend, setShowPerAthleteTrend] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshMessage, setRefreshMessage] = useState('');
   const [refreshTapCount, setRefreshTapCount] = useState(0);
@@ -296,6 +306,62 @@ export function StatsPage() {
     () => buildDailyHitRate(filteredStats),
     [filteredStats],
   );
+
+  /**
+   * 按人拆分的每日命中率序列。
+   * 日期轴沿用 dailyHitRate 的顺序（旧→新）；某球员某天没投篮则留 null，
+   * 画线时在此断开——不能补 0，否则会看出"今天掉到 0%"的假象。
+   */
+  const perAthleteSeries = useMemo<TrendSeries[]>(() => {
+    const days = dailyHitRate.map((row) => row.day);
+    if (days.length === 0) return [];
+
+    const daySet = new Set(days);
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const activeIds = new Set(activeAthletes.map((a) => a.id));
+
+    const acc = new Map<string, Map<string, { hits: number; attempts: number }>>();
+
+    filteredStats.forEach((row) => {
+      if (!activeIds.has(row.athleteId)) return;
+      const d = new Date(row.createdAt);
+      const day = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+      if (!daySet.has(day)) return;
+
+      let perDay = acc.get(row.athleteId);
+      if (!perDay) {
+        perDay = new Map();
+        acc.set(row.athleteId, perDay);
+      }
+      const cur = perDay.get(day) ?? { hits: 0, attempts: 0 };
+      cur.hits += row.hits;
+      cur.attempts += row.attempts;
+      perDay.set(day, cur);
+    });
+
+    const palette = [
+      '#00e6a8',
+      '#4d9bff',
+      '#ff8a3d',
+      '#c77dff',
+      '#ffd23f',
+      '#ff5d73',
+      '#3ddad7',
+      '#9aa7b4',
+    ];
+
+    return [...acc.entries()]
+      .map(([athleteId, perDay], index) => ({
+        athleteId,
+        name: athleteNameMap.get(athleteId) ?? athleteId,
+        color: palette[index % palette.length],
+        values: days.map((day) => {
+          const v = perDay.get(day);
+          return v && v.attempts > 0 ? v.hits / v.attempts : null;
+        }),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [dailyHitRate, filteredStats, activeAthletes, athleteNameMap]);
 
   /**
    * 今日战报：只统计「今天」且「已结束」的比赛，一局一张表。
@@ -621,13 +687,39 @@ export function StatsPage() {
       </section>
 
       <section className="card">
-        <p className="title">每日命中率</p>
-        <p className="subtitle">按天汇总命中情况，折线图展示趋势，可配合上方筛选查看单个人。</p>
+        <div className="row-between">
+          <p className="title">每日命中率</p>
+          <button
+            className={`button button-small ${showPerAthleteTrend ? '' : 'button-ghost'}`}
+            type="button"
+            onClick={() => setShowPerAthleteTrend((prev) => !prev)}
+          >
+            {showPerAthleteTrend ? '看合计' : '按人显示'}
+          </button>
+        </div>
+        <p className="subtitle">
+          {showPerAthleteTrend
+            ? '已按人拆分：每人一条线，某天没投篮则线在此断开（不补 0）。'
+            : '按天汇总命中情况，折线图展示趋势，可配合上方筛选查看单个人。'}
+        </p>
         {dailyHitRate.length === 0 ? (
           <p className="subtitle">暂无数据。</p>
         ) : (
           <>
-            <DailyHitRateChart rows={dailyHitRate} />
+            <DailyHitRateChart
+              rows={dailyHitRate}
+              series={showPerAthleteTrend ? perAthleteSeries : undefined}
+            />
+            {showPerAthleteTrend && perAthleteSeries.length > 0 ? (
+              <div className="trend-legend">
+                {perAthleteSeries.map((item) => (
+                  <span key={item.athleteId} className="trend-legend-item">
+                    <i style={{ background: item.color }} />
+                    {item.name}
+                  </span>
+                ))}
+              </div>
+            ) : null}
             <div className="ranking-table">
               <div className="ranking-row ranking-head daily-grid">
                 <span>日期</span>
@@ -709,7 +801,13 @@ export function StatsPage() {
   );
 }
 
-function DailyHitRateChart({ rows }: { rows: DailyHitRateRow[] }) {
+function DailyHitRateChart({
+  rows,
+  series,
+}: {
+  rows: DailyHitRateRow[];
+  series?: TrendSeries[];
+}) {
   const W = 600;
   const H = 180;
   const padL = 44;
@@ -727,6 +825,24 @@ function DailyHitRateChart({ rows }: { rows: DailyHitRateRow[] }) {
   const points = rows.map((row, i) => `${xFor(i).toFixed(1)},${yFor(row.rate).toFixed(1)}`).join(' ');
   const gridLines = [0, 0.25, 0.5, 0.75, 1];
 
+  const multi = !!series && series.length > 0;
+
+  // 把含 null 的序列切成连续段：null（当天没投篮）处断开，不补 0
+  const segmentsOf = (values: (number | null)[]) => {
+    const segs: { i: number; v: number }[][] = [];
+    let cur: { i: number; v: number }[] = [];
+    values.forEach((v, i) => {
+      if (v == null) {
+        if (cur.length > 0) segs.push(cur);
+        cur = [];
+        return;
+      }
+      cur.push({ i, v });
+    });
+    if (cur.length > 0) segs.push(cur);
+    return segs;
+  };
+
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="daily-chart" role="img" aria-label="每日命中率折线图">
       {gridLines.map((g) => {
@@ -742,21 +858,71 @@ function DailyHitRateChart({ rows }: { rows: DailyHitRateRow[] }) {
       })}
       {rows.length > 0 ? (
         <>
-          <polyline
-            points={points}
-            fill="none"
-            stroke="#00e6a8"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
+          {multi ? (
+            series!.map((item) => (
+              <g key={item.athleteId}>
+                {segmentsOf(item.values).map((seg, si) =>
+                  seg.length === 1 ? (
+                    <circle
+                      key={`seg${si}`}
+                      cx={xFor(seg[0].i)}
+                      cy={yFor(seg[0].v)}
+                      r="3"
+                      fill={item.color}
+                    />
+                  ) : (
+                    <polyline
+                      key={`seg${si}`}
+                      points={seg
+                        .map((p) => `${xFor(p.i).toFixed(1)},${yFor(p.v).toFixed(1)}`)
+                        .join(' ')}
+                      fill="none"
+                      stroke={item.color}
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  ),
+                )}
+                {item.values.map((v, i) =>
+                  v == null ? null : (
+                    <circle
+                      key={`dot${i}`}
+                      cx={xFor(i)}
+                      cy={yFor(v)}
+                      r="2.5"
+                      fill={item.color}
+                    />
+                  ),
+                )}
+              </g>
+            ))
+          ) : (
+            <>
+              <polyline
+                points={points}
+                fill="none"
+                stroke="#00e6a8"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              {rows.map((row, i) => (
+                <circle key={row.day} cx={xFor(i)} cy={yFor(row.rate)} r="4" fill="#00e6a8" />
+              ))}
+            </>
+          )}
           {rows.map((row, i) => (
-            <g key={row.day}>
-              <circle cx={xFor(i)} cy={yFor(row.rate)} r="4" fill="#00e6a8" />
-              <text x={xFor(i)} y={H - 8} textAnchor="middle" fontSize="11" fill="#8b98a5">
-                {row.dayLabel}
-              </text>
-            </g>
+            <text
+              key={`lab-${row.day}`}
+              x={xFor(i)}
+              y={H - 8}
+              textAnchor="middle"
+              fontSize="11"
+              fill="#8b98a5"
+            >
+              {row.dayLabel}
+            </text>
           ))}
         </>
       ) : null}
