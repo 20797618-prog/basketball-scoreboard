@@ -26,6 +26,7 @@ export function PeoplePage() {
   const [winRateMap, setWinRateMap] = useState<Record<string, string>>({});
   const [colaMap, setColaMap] = useState<Record<string, number>>({});
   const [message, setMessage] = useState('');
+  const [showDeleted, setShowDeleted] = useState(false);
 
   useEffect(() => {
     void refresh();
@@ -98,10 +99,14 @@ export function PeoplePage() {
     setColaMap(calculateColaBalances(athletes.map((a) => a.id), ledger));
   };
 
-  const sorted = useMemo(
-    () => [...list].sort((a, b) => Number(a.isDeleted) - Number(b.isDeleted)),
-    [list],
-  );
+  // 已删除/停用的球员默认不显示，避免干扰；需要恢复时再展开。
+  const activeCount = list.filter((a) => !a.isDeleted).length;
+  const deletedCount = list.length - activeCount;
+
+  const sorted = useMemo(() => {
+    const base = showDeleted ? list : list.filter((a) => !a.isDeleted);
+    return [...base].sort((a, b) => Number(a.isDeleted) - Number(b.isDeleted));
+  }, [list, showDeleted]);
 
   const claimMap = useMemo(() => {
     const map = new Map<string, AthleteClaim>();
@@ -228,7 +233,18 @@ export function PeoplePage() {
         {message ? <p className="subtitle">{message}</p> : null}
       </section>
       <section className="card">
-        <p className="subtitle">当前人数：{list.length}</p>
+        <div className="row-between">
+          <p className="subtitle">当前人数：{activeCount}</p>
+          {deletedCount > 0 ? (
+            <button
+              className="button button-small button-ghost"
+              type="button"
+              onClick={() => setShowDeleted((prev) => !prev)}
+            >
+              {showDeleted ? '隐藏已删除' : `显示已删除（${deletedCount}）`}
+            </button>
+          ) : null}
+        </div>
         <ul className="list-reset">
           {sorted.map((item) => (
             <li key={item.id} className="ledger-item">
