@@ -234,6 +234,32 @@ export function StatsPage() {
     [filteredStats, rounds, matches],
   );
 
+  /**
+   * 积分调整记录：来自 cola_ledger 的 adjust_reversal 条目
+   * （例如「系统问题补回」这类人为修正）。
+   * 这类修正同时改了 round_stats 的 point_delta 和账本，
+   * 但 round_stats 没有备注字段，所以在积分流水里单列出来展示备注。
+   */
+  const pointAdjustments = useMemo(
+    () =>
+      ledger
+        .filter((row) => row.type === 'adjust_reversal')
+        .map((row) => {
+          const toId = row.toAthleteId;
+          const fromId = row.fromAthleteId;
+          return {
+            key: `adjust-${row.id}`,
+            athleteId: toId ?? fromId ?? '',
+            note: row.note ?? '调整',
+            // 入账为正、出账为负（与补记方向一致）
+            delta: toId ? row.amount : -row.amount,
+            createdAt: row.createdAt,
+          };
+        })
+        .sort((a, b) => b.createdAt - a.createdAt),
+    [ledger],
+  );
+
   const hitRateRanking = useMemo(
     () => buildHitRateRanking(filteredStats),
     [filteredStats],
@@ -633,7 +659,28 @@ export function StatsPage() {
         ) : details.length === 0 ? (
           <p className="subtitle">暂无记录。</p>
         ) : (
-          <ul className="list-reset">
+          <>
+            {pointAdjustments.length > 0 ? (
+              <div className="point-adjust-block">
+                <p className="subtitle">调整记录</p>
+                <ul className="list-reset">
+                  {pointAdjustments.map((row) => (
+                    <li key={row.key} className="ledger-item">
+                      <div>
+                        {athleteNameMap.get(row.athleteId) ?? row.athleteId} · 系统调整
+                      </div>
+                      <div className="subtitle">备注：{row.note}</div>
+                      <div className="subtitle">
+                        积分 {row.delta > 0 ? `+${row.delta}` : row.delta}，可乐{' '}
+                        {row.delta > 0 ? `+${row.delta}` : row.delta}
+                      </div>
+                      <div className="subtitle">{new Date(row.createdAt).toLocaleString()}</div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <ul className="list-reset">
             {details.map((row) => (
               <li key={row.key} className="ledger-item">
                 <div>
@@ -648,6 +695,7 @@ export function StatsPage() {
               </li>
             ))}
           </ul>
+          </>
         )}
       </section>
     </main>

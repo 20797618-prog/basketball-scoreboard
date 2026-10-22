@@ -288,6 +288,13 @@ body {
   color: var(--text-dim);
 }
 
+/* 积分流水里的「调整记录」（人为补记/修正） */
+.point-adjust-block {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--border);
+}
+
 .button-wechat {
   width: 100%;
   background: #07c160;
