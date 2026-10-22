@@ -177,23 +177,30 @@ export function StatsPage() {
         : buildPointRankingFromRoundLedger(filteredLedger),
     [filteredStats, filteredLedger],
   );
+  // 榜单只统计「在用」球员：已删除/停用的不出现在任何排行榜里。
+  // （名字映射仍用全量 athletes，避免历史记录里出现裸 id）
+  const activeAthletes = useMemo(
+    () => athletes.filter((a) => !a.isDeleted),
+    [athletes],
+  );
+
   const pointRankingWithAllAthletes = useMemo(() => {
     const pointMap = new Map(pointRanking.map((row) => [row.athleteId, row.value]));
-    return [...athletes]
+    return [...activeAthletes]
       .map((athlete) => ({
         athleteId: athlete.id,
         value: pointMap.get(athlete.id) ?? 0,
       }))
       .sort((a, b) => b.value - a.value);
-  }, [athletes, pointRanking]);
+  }, [activeAthletes, pointRanking]);
   const colaBalances = useMemo(
-    () => calculateColaBalances(athletes.map((a) => a.id), ledger),
+    () => calculateColaBalances(activeAthletes.map((a) => a.id), ledger),
     [athletes, ledger],
   );
 
   const colaRanking = useMemo(
     () =>
-      [...athletes].sort(
+      [...activeAthletes].sort(
         (a, b) => (colaBalances[b.id] ?? 0) - (colaBalances[a.id] ?? 0),
       ),
     [athletes, colaBalances],
@@ -216,7 +223,7 @@ export function StatsPage() {
     const winMap = new Map(
       winRateRanking.map((row) => [row.athleteId, { value: row.value, wins: row.wins ?? 0, rounds: row.rounds ?? 0 }]),
     );
-    return [...athletes]
+    return [...activeAthletes]
       .map((athlete) => {
         const item = winMap.get(athlete.id);
         return {
@@ -227,7 +234,7 @@ export function StatsPage() {
         };
       })
       .sort((a, b) => b.value - a.value);
-  }, [athletes, winRateRanking]);
+  }, [activeAthletes, winRateRanking]);
 
   const details = useMemo(
     () => buildRoundDetails({ stats: filteredStats, rounds, matches }),
@@ -272,7 +279,7 @@ export function StatsPage() {
         { hits: row.hits, attempts: row.attempts, rate: row.rate },
       ]),
     );
-    return [...athletes]
+    return [...activeAthletes]
       .map((athlete) => {
         const item = map.get(athlete.id);
         return {
@@ -283,7 +290,7 @@ export function StatsPage() {
         };
       })
       .sort((a, b) => b.rate - a.rate);
-  }, [athletes, hitRateRanking]);
+  }, [activeAthletes, hitRateRanking]);
 
   const dailyHitRate = useMemo(
     () => buildDailyHitRate(filteredStats),
@@ -479,7 +486,7 @@ export function StatsPage() {
             onChange={(e) => setAthleteFilterId(e.target.value)}
           >
             <option value={allFilterValue()}>全部人</option>
-            {athletes.map((a) => (
+            {activeAthletes.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
               </option>
