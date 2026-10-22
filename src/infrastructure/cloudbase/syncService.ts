@@ -49,11 +49,19 @@ interface PullResponse {
   data: SyncPayload;
 }
 
-async function replaceLocalTable<T>(table: Table<T, string>, rows: T[]): Promise<void> {
-  await table.clear();
-  if (rows.length > 0) {
-    await table.bulkAdd(rows);
-  }
+/**
+ * 合并写入：只按主键 upsert，**不清空本地**。
+ *
+ * 拉取必须用这个而不是 replaceLocalTable —— 清空再写入会静默销毁
+ * 本地尚未上传的数据。曾经因此丢过一整轮比赛（第 5 轮）：
+ * 刚录完还没推上去，定时拉取先跑了一遍，本地被清空覆盖。
+ *
+ * 比赛/轮次/流水都是只增不改或软删除，合并语义不会丢数据；
+ * 代价是他端删除的行不会同步过来（本项目不依赖硬删除）。
+ */
+async function mergeLocalTable<T>(table: Table<T, string>, rows: T[]): Promise<void> {
+  if (rows.length === 0) return;
+  await table.bulkPut(rows);
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -209,14 +217,14 @@ export async function pullFromCloud(options?: { allowEmpty?: boolean }): Promise
       appDb.colaTransfers,
     ],
     async () => {
-      await replaceLocalTable(appDb.athletes, athletes);
-      await replaceLocalTable(appDb.matches, matches);
-      await replaceLocalTable(appDb.matchPlayers, matchPlayers);
-      await replaceLocalTable(appDb.rounds, rounds);
-      await replaceLocalTable(appDb.roundStats, roundStats);
-      await replaceLocalTable(appDb.colaLedger, colaLedger);
-      await replaceLocalTable(appDb.athleteClaims, athleteClaims);
-      await replaceLocalTable(appDb.colaTransfers, colaTransfers);
+      await mergeLocalTable(appDb.athletes, athletes);
+      await mergeLocalTable(appDb.matches, matches);
+      await mergeLocalTable(appDb.matchPlayers, matchPlayers);
+      await mergeLocalTable(appDb.rounds, rounds);
+      await mergeLocalTable(appDb.roundStats, roundStats);
+      await mergeLocalTable(appDb.colaLedger, colaLedger);
+      await mergeLocalTable(appDb.athleteClaims, athleteClaims);
+      await mergeLocalTable(appDb.colaTransfers, colaTransfers);
     },
   );
 

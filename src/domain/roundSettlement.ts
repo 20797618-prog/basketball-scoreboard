@@ -45,8 +45,19 @@ export function settleRound(
 
   const shouldAwardWinner =
     mode !== 'overtime_loser' && canAward && winnerRows.length === 1;
+
+  // 关键：一轮只能在「赢家已确定」时才扣输家。
+  // 否则会出现「最高分并列（赢家待定）+ 最低分唯一」的情形：
+  // 输家先被扣了 -1，赢家的 +1 却要等加时决出——若加时一直平/中途结束，
+  // 这 -1 就永远没有对手方，可乐凭空蒸发。
+  // overtime_loser 模式下赢家已在上一轮结算过，因此照常扣输家。
+  const winnerAlreadySettled = mode === 'overtime_loser' || winnerRows.length === 1;
+
   const shouldAwardLoser =
-    mode !== 'overtime_winner' && canAward && loserRows.length === 1;
+    mode !== 'overtime_winner' &&
+    canAward &&
+    loserRows.length === 1 &&
+    winnerAlreadySettled;
 
   const rows: SettlementRow[] = ranked.map((row) => {
     const isWinner = row.rank === topRank;
