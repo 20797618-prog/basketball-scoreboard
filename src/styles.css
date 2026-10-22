@@ -256,6 +256,38 @@ body {
   border-top: 1px dashed var(--border);
 }
 
+/* 排行页「今日战报」：一局一张表 */
+.today-matches {
+  display: grid;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.today-match-block {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.today-match-block:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.today-match-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.today-match-time {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
 .button-wechat {
   width: 100%;
   background: #07c160;

@@ -264,6 +264,74 @@ export function StatsPage() {
     [filteredStats],
   );
 
+  /**
+   * 今日战报：只统计「今天」且「已结束」的比赛，一局一张表。
+   * 表结构沿用「结束本局结算」：姓名 / 轮 / 积分 / 可乐，
+   * 轮按 roundNo 去重（同一轮的常规赛+加时算 1 轮）。
+   */
+  const todayMatchTables = useMemo(() => {
+    const now = new Date();
+    const isToday = (ts: number) => {
+      const d = new Date(ts);
+      return (
+        d.getFullYear() === now.getFullYear() &&
+        d.getMonth() === now.getMonth() &&
+        d.getDate() === now.getDate()
+      );
+    };
+
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const athleteMap = new Map(athletes.map((a) => [a.id, a.name]));
+
+    const todays = matches
+      .filter((m) => m.status === 'finished' && isToday(m.createdAt))
+      .sort((a, b) => a.createdAt - b.createdAt);
+
+    return todays.map((match, index) => {
+      const matchRounds = rounds.filter((r) => r.matchId === match.id);
+      const roundNoByRoundId = new Map(matchRounds.map((r) => [r.id, r.roundNo]));
+
+      const byAthlete = new Map<
+        string,
+        { roundNos: Set<number>; points: number; cola: number }
+      >();
+
+      roundStats
+        .filter((row) => row.matchId === match.id)
+        .forEach((row) => {
+          const roundNo = roundNoByRoundId.get(row.roundId);
+          const prev = byAthlete.get(row.athleteId) ?? {
+            roundNos: new Set<number>(),
+            points: 0,
+            cola: 0,
+          };
+          if (typeof roundNo === 'number') prev.roundNos.add(roundNo);
+          prev.points += row.pointDelta;
+          prev.cola += row.colaDelta;
+          byAthlete.set(row.athleteId, prev);
+        });
+
+      const rows = [...byAthlete.entries()]
+        .map(([athleteId, score]) => ({
+          athleteId,
+          name: athleteMap.get(athleteId) ?? athleteId,
+          rounds: score.roundNos.size,
+          points: score.points,
+          cola: score.cola,
+        }))
+        .sort((a, b) => b.points - a.points);
+
+      const created = new Date(match.createdAt);
+
+      return {
+        matchId: match.id,
+        label: `第 ${index + 1} 局`,
+        time: `${pad2(created.getHours())}:${pad2(created.getMinutes())}`,
+        rows,
+      };
+    });
+  }, [matches, rounds, roundStats, athletes]);
+
   const handleManualRefresh = () => {
     setRefreshTapCount((prev) => prev + 1);
     setRefreshMessage('手动刷新中...');
@@ -272,6 +340,44 @@ export function StatsPage() {
 
   return (
     <main className="page">
+      <section className="card">
+        <p className="title">今日战报</p>
+        <p className="subtitle">只显示今天已结束的局，一局一张表；轮按「同一轮含加时算 1 轮」统计。</p>
+        {todayMatchTables.length === 0 ? (
+          <p className="subtitle">今天还没有结束的比赛。</p>
+        ) : (
+          <div className="today-matches">
+            {todayMatchTables.map((table) => (
+              <div key={table.matchId} className="today-match-block">
+                <p className="today-match-title">
+                  {table.label}
+                  <span className="today-match-time">{table.time}</span>
+                </p>
+                <div className="result-table">
+                  <div className="result-row result-head result-row-4">
+                    <span>姓名</span>
+                    <span>轮</span>
+                    <span>积分</span>
+                    <span>可乐</span>
+                  </div>
+                  {table.rows.map((row) => (
+                    <div key={row.athleteId} className="result-row result-row-4">
+                      <span>{row.name}</span>
+                      <span className="result-num">{row.rounds}</span>
+                      <span className="result-num">
+                        {row.points > 0 ? `+${row.points}` : row.points}
+                      </span>
+                      <span className="result-num">
+                        {row.cola > 0 ? `+${row.cola}` : row.cola}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
       <section className="card">
         <h1 className="title">排行</h1>
         <p className="subtitle">三榜单 + 按全局/按月/按人筛选 + 详细轮次记录。</p>
