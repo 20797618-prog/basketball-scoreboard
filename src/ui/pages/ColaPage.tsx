@@ -49,6 +49,7 @@ export function ColaPage() {
   ]);
   const [transferNote, setTransferNote] = useState('');
   const [showColaLedger, setShowColaLedger] = useState(false);
+  const [showTransferLog, setShowTransferLog] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -447,7 +448,21 @@ export function ColaPage() {
 
       {pendingFromMe.length > 0 || recentDecided.length > 0 ? (
         <section className="card">
-          <p className="subtitle">转让记录（待确认 {pendingFromMe.length} 笔）</p>
+          <div className="inline-actions">
+            <p className="subtitle">转让记录（待确认 {pendingFromMe.length} 笔）</p>
+            <button
+              className="button button-small button-ghost"
+              type="button"
+              onClick={() => setShowTransferLog((prev) => !prev)}
+            >
+              {showTransferLog
+                ? '收起转让记录'
+                : `展开转让记录（${pendingFromMe.length + recentDecided.length} 条）`}
+            </button>
+          </div>
+          {!showTransferLog ? (
+            <p className="subtitle">已折叠，点击“展开转让记录”查看。</p>
+          ) : (
           <ul className="list-reset">
             {[...pendingFromMe, ...recentDecided].map((row) => (
               <li key={row.id} className="ledger-item">
@@ -483,6 +498,7 @@ export function ColaPage() {
               </li>
             ))}
           </ul>
+          )}
         </section>
       ) : null}
 
