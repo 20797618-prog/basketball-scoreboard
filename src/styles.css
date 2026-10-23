@@ -295,6 +295,13 @@ body {
   border-bottom: 1px dashed var(--border);
 }
 
+/* 每日命中率的图表类型选择 */
+.chart-type-row {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0 8px;
+}
+
 /* 每日命中率「按人显示」的图例 */
 .trend-legend {
   display: flex;

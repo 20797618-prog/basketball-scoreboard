@@ -28,6 +28,15 @@ const colaRepo = new ColaLedgerRepositoryDexie();
 
 type RankingTab = 'points' | 'cola' | 'winRate' | 'hitRate';
 
+/** 每日命中率的图表类型 */
+const CHART_TYPES = [
+  { key: 'line', label: '折线' },
+  { key: 'bar', label: '柱形' },
+  { key: 'scatter', label: '散点' },
+] as const;
+
+type ChartType = (typeof CHART_TYPES)[number]['key'];
+
 function rankTone(rank: number) {
   if (rank === 1) return 'is-first';
   if (rank === 2) return 'is-second';
@@ -66,6 +75,8 @@ export function StatsPage() {
   const [showPointLedger, setShowPointLedger] = useState(false);
   // 每日命中率：关=合计一条线；开=每个球员一条线
   const [showPerAthleteTrend, setShowPerAthleteTrend] = useState(false);
+  // 每日命中率的图表类型：折线 / 柱形 / 散点
+  const [chartType, setChartType] = useState<ChartType>('line');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshMessage, setRefreshMessage] = useState('');
   const [refreshTapCount, setRefreshTapCount] = useState(0);
@@ -362,6 +373,21 @@ export function StatsPage() {
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [dailyHitRate, filteredStats, activeAthletes, athleteNameMap]);
+
+  // 柱形图固定按人显示（"合计一根柱"没有意义），折线/散点沿用开关
+  const perAthleteMode = chartType === 'bar' ? true : showPerAthleteTrend;
+  const chartSeries = perAthleteMode ? perAthleteSeries : undefined;
+
+  const chartHint =
+    chartType === 'bar'
+      ? '柱形图：每天有几个人就几根柱子，柱高为该人当天命中率，颜色与图例对应。'
+      : chartType === 'scatter'
+        ? perAthleteMode
+          ? '散点图：每人一种颜色，只标点不连线；没投篮的当天不标点。'
+          : '散点图：只标点不连线。'
+        : perAthleteMode
+          ? '已按人拆分：每人一条线，某天没投篮则线在此断开（不补 0）。'
+          : '按天汇总命中情况，折线图展示趋势，可配合上方筛选查看单个人。';
 
   /**
    * 今日战报：只统计「今天」且「已结束」的比赛，一局一张表。
@@ -689,28 +715,35 @@ export function StatsPage() {
       <section className="card">
         <div className="row-between">
           <p className="title">每日命中率</p>
-          <button
-            className={`button button-small ${showPerAthleteTrend ? '' : 'button-ghost'}`}
-            type="button"
-            onClick={() => setShowPerAthleteTrend((prev) => !prev)}
-          >
-            {showPerAthleteTrend ? '看合计' : '按人显示'}
-          </button>
+          {chartType !== 'bar' ? (
+            <button
+              className={`button button-small ${showPerAthleteTrend ? '' : 'button-ghost'}`}
+              type="button"
+              onClick={() => setShowPerAthleteTrend((prev) => !prev)}
+            >
+              {showPerAthleteTrend ? '看合计' : '按人显示'}
+            </button>
+          ) : null}
         </div>
-        <p className="subtitle">
-          {showPerAthleteTrend
-            ? '已按人拆分：每人一条线，某天没投篮则线在此断开（不补 0）。'
-            : '按天汇总命中情况，折线图展示趋势，可配合上方筛选查看单个人。'}
-        </p>
+        <div className="chart-type-row">
+          {CHART_TYPES.map((item) => (
+            <button
+              key={item.key}
+              className={`button button-small ${chartType === item.key ? '' : 'button-ghost'}`}
+              type="button"
+              onClick={() => setChartType(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <p className="subtitle">{chartHint}</p>
         {dailyHitRate.length === 0 ? (
           <p className="subtitle">暂无数据。</p>
         ) : (
           <>
-            <DailyHitRateChart
-              rows={dailyHitRate}
-              series={showPerAthleteTrend ? perAthleteSeries : undefined}
-            />
-            {showPerAthleteTrend && perAthleteSeries.length > 0 ? (
+            <DailyHitRateChart rows={dailyHitRate} series={chartSeries} type={chartType} />
+            {chartSeries && chartSeries.length > 0 ? (
               <div className="trend-legend">
                 {perAthleteSeries.map((item) => (
                   <span key={item.athleteId} className="trend-legend-item">
@@ -804,9 +837,11 @@ export function StatsPage() {
 function DailyHitRateChart({
   rows,
   series,
+  type,
 }: {
   rows: DailyHitRateRow[];
   series?: TrendSeries[];
+  type: ChartType;
 }) {
   const W = 600;
   const H = 180;
@@ -818,6 +853,7 @@ function DailyHitRateChart({
   const plotH = H - padT - padB;
 
   const maxRate = 1;
+  const baseline = padT + plotH;
   const xFor = (i: number) =>
     rows.length <= 1 ? padL + plotW / 2 : padL + (plotW * i) / (rows.length - 1);
   const yFor = (rate: number) => padT + plotH - (rate / maxRate) * plotH;
@@ -843,6 +879,46 @@ function DailyHitRateChart({
     return segs;
   };
 
+  // 柱形图：每天一组，组内按人并排；没投篮的人当天不出柱子
+  const renderBars = () => {
+    const dayCount = rows.length;
+    const groupW = plotW / Math.max(dayCount, 1);
+    const slots = multi ? series!.length : 1;
+    const gap = Math.max(1, Math.min(3, groupW * 0.06));
+    const barW = Math.max(
+      2,
+      Math.min(14, (groupW * 0.86 - gap * (slots - 1)) / Math.max(slots, 1)),
+    );
+
+    return rows.map((row, i) => {
+      const center = padL + groupW * (i + 0.5);
+      const totalW = barW * slots + gap * (slots - 1);
+      const startX = center - totalW / 2;
+
+      const cells = multi
+        ? series!.map((item, si) => ({ key: item.athleteId, color: item.color, value: item.values[i], si }))
+        : [{ key: 'total', color: '#00e6a8', value: row.rate, si: 0 }];
+
+      return (
+        <g key={row.day}>
+          {cells.map((cell) =>
+            cell.value == null ? null : (
+              <rect
+                key={cell.key}
+                x={startX + cell.si * (barW + gap)}
+                y={yFor(cell.value)}
+                width={barW}
+                height={Math.max(1, baseline - yFor(cell.value))}
+                rx={Math.min(2, barW / 2)}
+                fill={cell.color}
+              />
+            ),
+          )}
+        </g>
+      );
+    });
+  };
+
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="daily-chart" role="img" aria-label="每日命中率折线图">
       {gridLines.map((g) => {
@@ -858,39 +934,43 @@ function DailyHitRateChart({
       })}
       {rows.length > 0 ? (
         <>
-          {multi ? (
+          {type === 'bar' ? (
+            renderBars()
+          ) : multi ? (
             series!.map((item) => (
               <g key={item.athleteId}>
-                {segmentsOf(item.values).map((seg, si) =>
-                  seg.length === 1 ? (
-                    <circle
-                      key={`seg${si}`}
-                      cx={xFor(seg[0].i)}
-                      cy={yFor(seg[0].v)}
-                      r="3"
-                      fill={item.color}
-                    />
-                  ) : (
-                    <polyline
-                      key={`seg${si}`}
-                      points={seg
-                        .map((p) => `${xFor(p.i).toFixed(1)},${yFor(p.v).toFixed(1)}`)
-                        .join(' ')}
-                      fill="none"
-                      stroke={item.color}
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  ),
-                )}
+                {type === 'line'
+                  ? segmentsOf(item.values).map((seg, si) =>
+                      seg.length === 1 ? (
+                        <circle
+                          key={`seg${si}`}
+                          cx={xFor(seg[0].i)}
+                          cy={yFor(seg[0].v)}
+                          r="3"
+                          fill={item.color}
+                        />
+                      ) : (
+                        <polyline
+                          key={`seg${si}`}
+                          points={seg
+                            .map((p) => `${xFor(p.i).toFixed(1)},${yFor(p.v).toFixed(1)}`)
+                            .join(' ')}
+                          fill="none"
+                          stroke={item.color}
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      ),
+                    )
+                  : null}
                 {item.values.map((v, i) =>
                   v == null ? null : (
                     <circle
                       key={`dot${i}`}
                       cx={xFor(i)}
                       cy={yFor(v)}
-                      r="2.5"
+                      r={type === 'scatter' ? 3.5 : 2.5}
                       fill={item.color}
                     />
                   ),
@@ -899,14 +979,16 @@ function DailyHitRateChart({
             ))
           ) : (
             <>
-              <polyline
-                points={points}
-                fill="none"
-                stroke="#00e6a8"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
+              {type === 'line' ? (
+                <polyline
+                  points={points}
+                  fill="none"
+                  stroke="#00e6a8"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              ) : null}
               {rows.map((row, i) => (
                 <circle key={row.day} cx={xFor(i)} cy={yFor(row.rate)} r="4" fill="#00e6a8" />
               ))}
