@@ -101,6 +101,55 @@ export function MatchPage() {
   const [roundEndRows, setRoundEndRows] = useState<RoundEndSummaryRow[]>([]);
   const [showMatchEndModal, setShowMatchEndModal] = useState(false);
   const [matchEndRows, setMatchEndRows] = useState<MatchEndSummaryRow[]>([]);
+  const [settlementWarning, setSettlementWarning] = useState('');
+
+  /**
+   * A 方案：常规轮「最高分并列」时，赢家要等加时定，输家的 −1 也一起延后。
+   * 记下该轮的输家和轮次 id，等 overtime_winner 决出唯一赢家后，
+   * 再把这笔 −1 回写到原常规轮（输家的投篮数据在那条记录上）。
+   * 若整场结束都未决出赢家，则这轮不结算（不加不扣）。
+   */
+  const pendingLoserRef = useRef<{ roundId: string; loserIds: string[] } | null>(null);
+
+  const settlePendingLoser = async () => {
+    const pending = pendingLoserRef.current;
+    if (!pending || !activeMatch) return;
+    pendingLoserRef.current = null;
+    try {
+      const all = await roundRepo.getRoundStatsByMatch(activeMatch.match.id);
+      const targets = all.filter(
+        (row) =>
+          row.roundId === pending.roundId && pending.loserIds.includes(row.athleteId),
+      );
+      if (targets.length === 0) return;
+
+      await roundRepo.updateRoundStats(
+        targets.map((row) => ({
+          ...row,
+          pointDelta: -1 as const,
+          colaDelta: -1 as const,
+          rankGroup: 'loser' as const,
+        })),
+      );
+
+      await colaRepo.append(
+        targets.map((row) => ({
+          id: createId(),
+          type: 'round_reward' as const,
+          fromAthleteId: row.athleteId,
+          toAthleteId: null,
+          amount: 1,
+          matchId: activeMatch.match.id,
+          roundId: pending.roundId,
+          note: '比赛扣减',
+          createdAt: Date.now(),
+          operator: 'system' as const,
+        })),
+      );
+    } catch {
+      // 回写失败不阻断主流程；结束本局的自检会提示账面不平
+    }
+  };
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const athleteMap = useMemo(() => {
@@ -384,6 +433,9 @@ export function MatchPage() {
     setLastSubmission(null);
     setShowMatchEndModal(false);
     setMatchEndRows([]);
+    setSettlementWarning('');
+    // 未决轮次的欠账随比赛结束一并作废（该轮不结算）
+    pendingLoserRef.current = null;
     setStage('select');
   };
 
@@ -432,6 +484,27 @@ export function MatchPage() {
     });
 
     setMatchEndRows(rows.sort((a, b) => b.points - a.points));
+
+    // 自检：按「轮」校验收支是否成对（同一 roundNo 的常规+加时算一轮）。
+    // 正常每轮应为 +1 / −1 抵消，净额恒为 0；不为 0 说明有孤立的加或扣。
+    const netByRoundNo = new Map<number, number>();
+    stats.forEach((row) => {
+      const roundNo = roundNoByRoundId.get(row.roundId);
+      if (typeof roundNo !== 'number') return;
+      netByRoundNo.set(roundNo, (netByRoundNo.get(roundNo) ?? 0) + row.pointDelta);
+    });
+    const badRounds = [...netByRoundNo.entries()]
+      .filter(([, v]) => v !== 0)
+      .sort((a, b) => a[0] - b[0])
+      .map(([roundNo, v]) => `第 ${roundNo} 轮(${v > 0 ? '+' : ''}${v})`);
+    const totalNet = [...netByRoundNo.values()].reduce((sum, v) => sum + v, 0);
+
+    setSettlementWarning(
+      badRounds.length > 0
+        ? `⚠️ 账面不平：${badRounds.join('、')}；本场积分净 ${totalNet > 0 ? '+' : ''}${totalNet}。正常应为 0。`
+        : '',
+    );
+
     setShowMatchEndModal(true);
   };
 
@@ -529,6 +602,12 @@ export function MatchPage() {
         const hasWinnerTie = settlement.needWinnerOvertime;
         setPendingWinnerIds(hasWinnerTie ? settlement.winnerAthleteIds : []);
 
+        // 赢家并列、输家唯一 → 输家的 −1 先不算，等加时决出赢家再回写本轮回
+        pendingLoserRef.current =
+          hasWinnerTie && !hasLoserTie && settlement.loserAthleteIds.length === 1
+            ? { roundId: round.id, loserIds: settlement.loserAthleteIds }
+            : null;
+
         if (hasLoserTie) {
           plannedNext = {
             mode: 'overtime_loser',
@@ -585,6 +664,8 @@ export function MatchPage() {
         };
       } else {
         setPendingWinnerIds([]);
+        // 赢家已决出：把本轮输家欠下的 −1 回写到原常规轮，保证收支成对
+        await settlePendingLoser();
       }
     } else {
       setPendingWinnerIds([]);
@@ -1019,6 +1100,9 @@ export function MatchPage() {
                 </div>
               ))}
             </div>
+            {settlementWarning ? (
+              <p className="subtitle settlement-warning">{settlementWarning}</p>
+            ) : null}
             <p className="subtitle">说明：同一轮内的常规赛和加时赛，按 1 轮计算。</p>
             <div className="inline-actions">
               <button className="button" type="button" onClick={() => void finishMatch()}>

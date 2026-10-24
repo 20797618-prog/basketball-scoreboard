@@ -11,6 +11,11 @@ export class RoundRepositoryDexie implements RoundRepository {
     await appDb.roundStats.bulkAdd(rows);
   }
 
+  async updateRoundStats(rows: RoundStat[]): Promise<void> {
+    if (rows.length === 0) return;
+    await appDb.roundStats.bulkPut(rows);
+  }
+
   async getRoundsByMatch(matchId: string): Promise<Round[]> {
     return appDb.rounds.where('matchId').equals(matchId).sortBy('createdAt');
   }

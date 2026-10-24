@@ -30,6 +30,8 @@ export interface MatchRepository {
 export interface RoundRepository {
   createRound(round: Round): Promise<void>;
   saveRoundStats(rows: RoundStat[]): Promise<void>;
+  /** 按主键更新既有轮次统计（用于加时决出赢家后回写该轮输家的结算）。 */
+  updateRoundStats(rows: RoundStat[]): Promise<void>;
   getRoundsByMatch(matchId: string): Promise<Round[]>;
   getRoundStatsByMatch(matchId: string): Promise<RoundStat[]>;
   listAllRounds(): Promise<Round[]>;
