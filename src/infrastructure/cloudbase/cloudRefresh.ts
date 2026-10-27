@@ -15,7 +15,7 @@
  */
 import { getToken, getCurrentEmail } from '../auth/authService';
 import { pullFromCloud } from './syncService';
-import { withAutoBackupSuppressed, subscribeAutoBackup } from './autoBackup';
+import { withAutoBackupSuppressed, subscribeAutoBackup, shouldDeferPull, flushNow } from './autoBackup';
 
 /** 数据被云端刷新后的广播事件名。 */
 export const DATA_REFRESHED_EVENT = 'scoreboard:data-refreshed';
@@ -44,6 +44,13 @@ async function pullNow(reason: string): Promise<void> {
   if (pulling) return;
   if (!canPull()) return;
   if (Date.now() - lastPullAt < MIN_GAP_MS) return;
+
+  // 本地刚改过、还没推上去：先把改动推上去，这一轮不拉。
+  // 否则合并写入会用云端旧值覆盖掉刚写的内容（曾因此丢过一次结算）。
+  if (shouldDeferPull()) {
+    void flushNow();
+    return;
+  }
   void reason;
 
   pulling = true;
