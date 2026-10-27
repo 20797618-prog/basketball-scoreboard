@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildLedgerEntryFromTransfer,
   buildPendingTransfers,
@@ -200,11 +200,21 @@ export function ColaPage() {
     setSuccess(`已发起 ${pending.length} 笔转让申请，等对方确认后才会计入可乐余额。`);
   };
 
+  /** 正在处理中的申请 id：防止连点导致并发重复提交。 */
+  const decidingRef = useRef<Set<string>>(new Set());
+
   /** 同意：先写正式账本（幂等 id），再把申请标记为已同意。 */
   const approveTransfer = async (row: ColaTransfer) => {
     setError('');
     setSuccess('');
     if (!email) return;
+
+    if (row.status !== 'pending') {
+      setError('这笔申请已经处理过了。');
+      setTransfers(await transferRepo.listAll());
+      return;
+    }
+    if (decidingRef.current.has(row.id)) return;
 
     if (!myAthleteIds.includes(row.toAthleteId)) {
       setError('这笔转让不是转给你的，无法确认。');
@@ -215,44 +225,71 @@ export function ColaPage() {
       return;
     }
 
-    const decidedAt = Date.now();
-    const decided: ColaTransfer = {
-      ...row,
-      status: 'approved',
-      decidedByEmail: email,
-      decidedAt,
-    };
+    decidingRef.current.add(row.id);
+    try {
+      const decidedAt = Date.now();
+      const decided: ColaTransfer = {
+        ...row,
+        status: 'approved',
+        decidedByEmail: email,
+        decidedAt,
+      };
 
-    await colaRepo.append([buildLedgerEntryFromTransfer(decided)]);
-    await transferRepo.patch(row.id, {
-      status: 'approved',
-      decidedByEmail: email,
-      decidedAt,
-    });
+      try {
+        await colaRepo.append([buildLedgerEntryFromTransfer(decided)]);
+      } catch {
+        // 账本条目 id 由转账 id 派生（transfer-entry-<id>），主键冲突说明这笔已记过账，
+        // 忽略即可 —— 绝不能因此把申请卡在 pending。
+      }
+      await transferRepo.patch(row.id, {
+        status: 'approved',
+        decidedByEmail: email,
+        decidedAt,
+      });
 
-    setEntries(await colaRepo.listAll());
-    setTransfers(await transferRepo.listAll());
-    setSuccess(
-      `已同意：${nameOf(row.fromAthleteId)} → ${nameOf(row.toAthleteId)} ${row.amount} 瓶。`,
-    );
+      setEntries(await colaRepo.listAll());
+      setTransfers(await transferRepo.listAll());
+      setSuccess(
+        `已同意：${nameOf(row.fromAthleteId)} → ${nameOf(row.toAthleteId)} ${row.amount} 瓶。`,
+      );
+    } catch (err) {
+      setError(`确认失败：${String(err)}`);
+    } finally {
+      decidingRef.current.delete(row.id);
+    }
   };
 
   const rejectTransfer = async (row: ColaTransfer) => {
     setError('');
     setSuccess('');
     if (!email) return;
+
+    if (row.status !== 'pending') {
+      setError('这笔申请已经处理过了。');
+      setTransfers(await transferRepo.listAll());
+      return;
+    }
+    if (decidingRef.current.has(row.id)) return;
+
     if (!myAthleteIds.includes(row.toAthleteId)) {
       setError('这笔转让不是转给你的，无法处理。');
       return;
     }
 
-    await transferRepo.patch(row.id, {
-      status: 'rejected',
-      decidedByEmail: email,
-      decidedAt: Date.now(),
-    });
-    setTransfers(await transferRepo.listAll());
-    setSuccess('已拒绝该笔转让申请。');
+    decidingRef.current.add(row.id);
+    try {
+      await transferRepo.patch(row.id, {
+        status: 'rejected',
+        decidedByEmail: email,
+        decidedAt: Date.now(),
+      });
+      setTransfers(await transferRepo.listAll());
+      setSuccess('已拒绝该笔转让申请。');
+    } catch (err) {
+      setError(`拒绝失败：${String(err)}`);
+    } finally {
+      decidingRef.current.delete(row.id);
+    }
   };
 
   const cancelTransfer = async (row: ColaTransfer) => {
@@ -260,13 +297,27 @@ export function ColaPage() {
     setSuccess('');
     if (!email) return;
 
-    await transferRepo.patch(row.id, {
-      status: 'canceled',
-      decidedByEmail: email,
-      decidedAt: Date.now(),
-    });
-    setTransfers(await transferRepo.listAll());
-    setSuccess('已撤销该笔申请。');
+    if (row.status !== 'pending') {
+      setError('这笔申请已经处理过了。');
+      setTransfers(await transferRepo.listAll());
+      return;
+    }
+    if (decidingRef.current.has(row.id)) return;
+
+    decidingRef.current.add(row.id);
+    try {
+      await transferRepo.patch(row.id, {
+        status: 'canceled',
+        decidedByEmail: email,
+        decidedAt: Date.now(),
+      });
+      setTransfers(await transferRepo.listAll());
+      setSuccess('已撤销该笔申请。');
+    } catch (err) {
+      setError(`撤销失败：${String(err)}`);
+    } finally {
+      decidingRef.current.delete(row.id);
+    }
   };
 
   const describeEntry = (entry: ColaLedgerEntry) => {
