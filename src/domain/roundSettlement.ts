@@ -26,9 +26,19 @@ export interface SettlementResult {
   duelAthleteIds: string[];
 }
 
+export interface SettleOptions {
+  /**
+   * 是否允许在本轮结算输家。默认 true。
+   * 若本轮赢家尚未确定（最高分并列、赢家要另行加时），
+   * 调用方应传 false，把输家的 −1 也一起押后，避免只扣不加。
+   */
+  chargeLoser?: boolean;
+}
+
 export function settleRound(
   items: RankingInput[],
   mode: SettlementMode = 'regular',
+  opts: SettleOptions = {},
 ): SettlementResult {
   const ranked = rankRoundByRules(items);
 
@@ -57,7 +67,8 @@ export function settleRound(
     mode !== 'overtime_winner' &&
     canAward &&
     loserRows.length === 1 &&
-    winnerAlreadySettled;
+    winnerAlreadySettled &&
+    opts.chargeLoser !== false;
 
   const rows: SettlementRow[] = ranked.map((row) => {
     const isWinner = row.rank === topRank;
@@ -123,7 +134,26 @@ export function settleRound(
  * - 命中数相同：本轮不结算，继续下一球，直到分出胜负。
  */
 function settleDuel(ranked: RankingOutput[]): SettlementResult {
-  const tied = ranked.length >= 2 && ranked[0].hits === ranked[1].hits;
+  // 边界：duel 只剩 1 人（例如中途有人退出）。此时不能既判赢又判输（会只加不减），
+  // 直接按未决处理，不结算任何一方。
+  if (ranked.length < 2) {
+    return {
+      rows: ranked.map((row) => ({
+        ...row,
+        rankGroup: 'pending' as RankGroup,
+        pointDelta: 0 as const,
+        colaDelta: 0 as const,
+      })),
+      needLoserOvertime: false,
+      needWinnerOvertime: false,
+      loserAthleteIds: [],
+      winnerAthleteIds: [],
+      needDuelOvertime: false,
+      duelAthleteIds: [],
+    };
+  }
+
+  const tied = ranked[0].hits === ranked[1].hits;
 
   const rows: SettlementRow[] = ranked.map((row, index) => {
     const isWinner = !tied && index === 0;

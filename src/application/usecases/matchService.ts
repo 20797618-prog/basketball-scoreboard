@@ -1,5 +1,6 @@
 import {
   settleRound,
+  type SettleOptions,
   type SettlementMode,
   type SettlementResult,
 } from '../../domain/roundSettlement';
@@ -10,8 +11,9 @@ import { createId } from '../../shared/createId';
 export function previewRoundSettlement(
   inputs: RankingInput[],
   mode: SettlementMode = 'regular',
+  opts: SettleOptions = {},
 ) {
-  return settleRound(inputs, mode);
+  return settleRound(inputs, mode, opts);
 }
 
 export function toRoundPhase(mode: SettlementMode): RoundPhase {

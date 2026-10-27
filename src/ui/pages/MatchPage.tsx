@@ -110,6 +110,10 @@ export function MatchPage() {
    * 若整场结束都未决出赢家，则这轮不结算（不加不扣）。
    */
   const pendingLoserRef = useRef<{ roundId: string; loserIds: string[] } | null>(null);
+  /** 本轮赢家是否仍待加时决出（最高分并列）。用于把输家的 −1 一起押后。 */
+  const winnerTiePendingRef = useRef(false);
+  /** 本轮【常规轮】的记录 id：加时可能连环多次，parentRoundId 会漂移，必须记住根轮次。 */
+  const roundRootIdRef = useRef<string | null>(null);
 
   const settlePendingLoser = async () => {
     const pending = pendingLoserRef.current;
@@ -436,6 +440,8 @@ export function MatchPage() {
     setSettlementWarning('');
     // 未决轮次的欠账随比赛结束一并作废（该轮不结算）
     pendingLoserRef.current = null;
+    winnerTiePendingRef.current = false;
+    roundRootIdRef.current = null;
     setStage('select');
   };
 
@@ -542,7 +548,10 @@ export function MatchPage() {
       hits: hitsMap[athleteId] ?? 0,
     }));
 
-    const settlement = previewRoundSettlement(inputs, session.mode);
+    // 赢家仍待加时决出时，本轮输家也不许结算（否则会出现只扣不加）
+    const settlement = previewRoundSettlement(inputs, session.mode, {
+      chargeLoser: !(session.mode === 'overtime_loser' && winnerTiePendingRef.current),
+    });
 
     const round = buildRound({
       matchId: activeMatch.match.id,
@@ -607,6 +616,9 @@ export function MatchPage() {
           hasWinnerTie && !hasLoserTie && settlement.loserAthleteIds.length === 1
             ? { roundId: round.id, loserIds: settlement.loserAthleteIds }
             : null;
+        // 记住本轮赢家是否待决；根轮次 id 供后续加时回写使用
+        winnerTiePendingRef.current = hasWinnerTie;
+        roundRootIdRef.current = round.id;
 
         if (hasLoserTie) {
           plannedNext = {
@@ -634,12 +646,21 @@ export function MatchPage() {
           overtimeSeq: session.overtimeSeq + 1,
         };
       } else if (pendingWinnerIds.length > 1) {
+        // 输家已决出。若赢家仍待决（常规轮上下都并列），
+        // 这笔 −1 也要押后，等赢家链决出后一起回写，避免中途结束只扣不加。
+        if (winnerTiePendingRef.current) {
+          pendingLoserRef.current = {
+            roundId: roundRootIdRef.current ?? session.parentRoundId ?? '',
+            loserIds: settlement.loserAthleteIds,
+          };
+        }
         plannedNext = {
           mode: 'overtime_winner',
           participants: pendingWinnerIds,
           roundNo: session.roundNo,
           parentRoundId: session.parentRoundId,
-          overtimeSeq: 1,
+          // 接在输家链之后编号，避免两条链都用 #1 造成混淆
+          overtimeSeq: session.overtimeSeq + 1,
         };
         setPendingWinnerIds([]);
       } else {
@@ -664,6 +685,7 @@ export function MatchPage() {
         };
       } else {
         setPendingWinnerIds([]);
+        winnerTiePendingRef.current = false;
         // 赢家已决出：把本轮输家欠下的 −1 回写到原常规轮，保证收支成对
         await settlePendingLoser();
       }
